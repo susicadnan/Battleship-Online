@@ -91,8 +91,8 @@ direct connect.
   and adds a hop of latency; there is no limit on concurrent relays yet.
 - Fighters and stage are picked on the Netplay page, not in the CSS. Only
   the host's stage pick counts.
-- Rematch is implemented but has only been compiled and reviewed, not played
-  to the end of a game in a test (the headless tests never finish a match).
+- Stocks and time limit are the only rules the host can set; items are off
+  and handicap/team settings are fixed by `syNetPeerMakeBootstrapMetadata`.
 
 ## Rematch
 
@@ -103,7 +103,9 @@ control packet (ping-sized, carrying its fighter pick) every half second;
 when both have, the host re-runs the match config exchange with a fresh
 seed and both drop back into the battle. Leave closes the socket; a new
 opponent goes through the server again. `SSB64_LOBBY_AUTO_REMATCH=1` asks
-for one automatically a second after each game.
+for one automatically a second after each game; with `SSB64_LOBBY_TIME=1`
+(a one-minute time match) that is the headless end-to-end test, and it
+passes: two games, identical fighter hashes in both.
 
 ## Disconnects
 
