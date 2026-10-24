@@ -93,4 +93,12 @@ direct connect.
   the host's stage pick counts.
 - The socket is closed when the battle ends; a rematch goes through the
   lobby again.
-- No ping / rollback-frame display during the match.
+
+## In-match HUD
+
+`port/netplay/overlay.cpp` draws a one-line window in the top left while a
+netpeer session is active: ping (PING/PONG control packets every 30 frames,
+smoothed), input delay, rollbacks per second and the deepest rollback so
+far, how many ticks are currently running on prediction, and the frame
+advantage when one side is ahead. `gNetplay.Overlay` (Settings → Netplay)
+turns it off.
