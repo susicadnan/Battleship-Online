@@ -28,6 +28,7 @@ typedef enum PortLobbyState
 	PORT_LOBBY_PUNCHING,      /* both endpoints known, exchanging PUNCH datagrams */
 	PORT_LOBBY_BOOTSTRAP,     /* netpeer is exchanging the match config */
 	PORT_LOBBY_IN_MATCH,
+	PORT_LOBBY_POST_MATCH,    /* game over, connection kept; Rematch or Leave */
 	PORT_LOBBY_FAILED,
 } PortLobbyState;
 
@@ -50,6 +51,12 @@ const char *port_lobby_status(void);   /* one line for the UI */
 
 /* From sys/netpeer.c when a match ends abnormally (peer gone, quit). */
 void port_lobby_notify_match_over(const char *reason);
+/* From sys/netpeer.c when a game ends normally and the connection is kept. */
+void port_lobby_notify_post_match(void);
+
+/* Post-match: ask for another game with the same opponent / hang up. */
+void port_lobby_request_rematch(void);
+int port_lobby_peer_wants_rematch(void);
 const char *port_lobby_public_addr(void); /* "" until registered */
 
 #ifdef __cplusplus

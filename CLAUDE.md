@@ -16,7 +16,8 @@ Detailed reference material lives under `docs/`. Read the file that matches the 
 | IDO BE bitfield layout audit (compile + rabbitizer disasm to verify port struct bit positions) | `docs/debug_ido_bitfield_layout.md` |
 | Resolved bugs (index + per-bug root cause / fix write-ups) | `docs/bugs/README.md` |
 | Rollback netcode: state section, snapshot/restore, SyncTest, remaining phases | `docs/rollback_design.md`, `docs/netcode_agent_rules.md` |
-| Online play: connect codes, rendezvous server, hole punching, lobby, Netplay menu page | `docs/netplay_connect_codes.md` |
+| Online play: connect codes, rendezvous server, hole punching, relay, lobby, Netplay menu page, HUD | `docs/netplay_connect_codes.md` |
+| Running the rendezvous server on a VPS (systemd, Docker, sizing) | `docs/netplay_hosting.md` |
 
 Ongoing investigations and handoff notes are loose `.md` files at the top level of `docs/` — check there before starting work on rendering, collision, or animation issues so you don't duplicate prior effort.
 

@@ -23,6 +23,9 @@ extern "C" void syNetPeerLobbyConfigure(intptr_t sock, const PortNetAddr *peer, 
                                         uint8_t client_fighter, uint32_t stage_kind);
 extern "C" int syNetPeerLobbyStep(void);
 extern "C" void syNetPeerLobbyAbort(void);
+extern "C" void syNetPeerRematchRequest(uint8_t my_fighter);
+extern "C" int syNetPeerRematchStep(void);
+extern "C" int syNetPeerCheckPeerWantsRematch(void);
 
 namespace {
 
@@ -49,6 +52,7 @@ struct Lobby
 	bool relayed = false;      /* game packets go through the server */
 	bool peer_saw_us = false;  /* the peer's PUNCH reported that it has seen ours */
 	bool force_relay = false;  /* SSB64_LOBBY_FORCE_RELAY=1: never punch, to test the relay */
+	bool auto_rematch = false; /* SSB64_LOBBY_AUTO_REMATCH=1: ask for a rematch a second after each game */
 	int peer_fighter = 0;
 	intptr_t sock = -1;
 	int frames = 0;            /* frames in the current state */
@@ -264,6 +268,7 @@ static void lobby_autostart_from_env()
 	if (const char *delay = std::getenv("SSB64_LOBBY_DELAY")) CVarSetInteger("gNetplay.Delay", std::atoi(delay));
 	if (const char *tag = std::getenv("SSB64_LOBBY_TAG")) CVarSetString("gNetplay.Tag", tag);
 	if (const char *relay = std::getenv("SSB64_LOBBY_FORCE_RELAY")) g.force_relay = std::atoi(relay) != 0;
+	if (const char *rematch = std::getenv("SSB64_LOBBY_AUTO_REMATCH")) g.auto_rematch = std::atoi(rematch) != 0;
 	if (const char *code = std::getenv("SSB64_LOBBY_CONNECT")) {
 		port_lobby_connect(code);
 	} else if (const char *direct = std::getenv("SSB64_LOBBY_DIRECT")) {
@@ -315,7 +320,34 @@ extern "C" void port_lobby_tick(void)
 		else if (rc < 0) set_state(PORT_LOBBY_FAILED, "Match setup timed out");
 		return;
 	}
+
+	case PORT_LOBBY_POST_MATCH: {
+		int rc = syNetPeerRematchStep();
+		if (rc > 0) set_state(PORT_LOBBY_BOOTSTRAP, "Rematch! Exchanging match settings");
+		else if (rc < 0) set_state(PORT_LOBBY_IDLE, "Not connected");
+		else if (g.auto_rematch && g.frames == 60) port_lobby_request_rematch();
+		return;
 	}
+	}
+}
+
+extern "C" void port_lobby_notify_post_match(void)
+{
+	/* netpeer still owns the socket; it only comes back to us on Leave. */
+	g.sock = -1;
+	set_state(PORT_LOBBY_POST_MATCH, "Game over. Rematch?");
+}
+
+extern "C" void port_lobby_request_rematch(void)
+{
+	if (g.state != PORT_LOBBY_POST_MATCH) return;
+	syNetPeerRematchRequest((uint8_t)my_fighter());
+	set_state(PORT_LOBBY_POST_MATCH, "Rematch requested, waiting for the other player");
+}
+
+extern "C" int port_lobby_peer_wants_rematch(void)
+{
+	return g.state == PORT_LOBBY_POST_MATCH && syNetPeerCheckPeerWantsRematch();
 }
 
 extern "C" const char *port_lobby_code(void)
@@ -333,7 +365,9 @@ extern "C" void port_lobby_set_name(const char *name)
 
 extern "C" void port_lobby_connect(const char *friend_code)
 {
-	if (g.state == PORT_LOBBY_PUNCHING || g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_IN_MATCH) return;
+	if (g.state == PORT_LOBBY_PUNCHING || g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_IN_MATCH ||
+	    g.state == PORT_LOBBY_POST_MATCH)
+		return;
 	refresh_code();
 	if (!port_netsock_parse_addr(CVarGetString("gNetplay.Server", ""), &g.server)) {
 		set_state(PORT_LOBBY_FAILED, "Set the rendezvous server as host:port first");
@@ -361,7 +395,9 @@ extern "C" void port_lobby_connect(const char *friend_code)
 
 extern "C" void port_lobby_connect_direct(const char *host_port, int is_host)
 {
-	if (g.state == PORT_LOBBY_PUNCHING || g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_IN_MATCH) return;
+	if (g.state == PORT_LOBBY_PUNCHING || g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_IN_MATCH ||
+	    g.state == PORT_LOBBY_POST_MATCH)
+		return;
 	refresh_code();
 	PortNetAddr peer;
 	if (!port_netsock_parse_addr(host_port, &peer)) {
@@ -383,7 +419,7 @@ extern "C" void port_lobby_connect_direct(const char *host_port, int is_host)
 
 extern "C" void port_lobby_cancel(void)
 {
-	if (g.state == PORT_LOBBY_BOOTSTRAP) syNetPeerLobbyAbort();
+	if (g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_POST_MATCH) syNetPeerLobbyAbort();
 	else if (g.sock >= 0 && !g.direct && g.state != PORT_LOBBY_IDLE)
 		send_text(&g.server, std::string(kMagic) + " LEAVE " + g.code);
 	close_socket();

@@ -35,7 +35,8 @@ void load_fields()
 bool busy()
 {
 	int s = port_lobby_state();
-	return s == PORT_LOBBY_PUNCHING || s == PORT_LOBBY_BOOTSTRAP || s == PORT_LOBBY_IN_MATCH;
+	return s == PORT_LOBBY_PUNCHING || s == PORT_LOBBY_BOOTSTRAP || s == PORT_LOBBY_IN_MATCH ||
+	       s == PORT_LOBBY_POST_MATCH;
 }
 
 int clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -120,6 +121,14 @@ void PortNetplayDrawPanel()
 
 	ImGui::SeparatorText("Status");
 	ImGui::TextWrapped("%s", port_lobby_status());
+	if (port_lobby_state() == PORT_LOBBY_POST_MATCH) {
+		if (port_lobby_peer_wants_rematch()) {
+			ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Your opponent wants a rematch!");
+		}
+		if (ImGui::Button("Rematch")) port_lobby_request_rematch();
+		ImGui::SameLine();
+		if (ImGui::Button("Leave")) port_lobby_cancel();
+	}
 	if (port_lobby_public_addr()[0] != '\0') {
 		ImGui::TextDisabled("Public endpoint: %s", port_lobby_public_addr());
 	}
