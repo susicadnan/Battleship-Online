@@ -10,6 +10,7 @@
 #include "Compat.h"
 #include "../enhancements/enhancements.h"
 #include "../interpolation/frame_interpolation.h"
+#include "../netplay/lobby_ui.h"
 #ifdef PORT_HIRES_ENABLED
 #include "../hires/HiResPack.h"
 #endif
@@ -1171,6 +1172,14 @@ void PortMenu::AddMenuSettings() {
         .CVar(ssb64::enhancements::DisableHUDCVarName())
         .RaceDisable(false)
         .Options(CheckboxOptions().Tooltip("Disables the in-game HUD. Note that some icons will still be visible (e.g. CPU icons in 1P Mode on the top-left.)"));
+
+    // --- Netplay: connect codes, direct connect, match settings ---
+    path.sidebarName = "Netplay";
+    path.column = SECTION_COLUMN_1;
+    AddSidebarEntry("Settings", "Netplay", 1);
+    AddWidget(path, "netplay_panel", WIDGET_CUSTOM)
+        .RaceDisable(false)
+        .CustomFunction([](WidgetInfo&) { PortNetplayDrawPanel(); });
 
     // --- Input customization ---
     path.sidebarName = "Input Mappings";

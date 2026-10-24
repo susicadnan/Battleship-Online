@@ -27,6 +27,7 @@
 #include "port.h"
 #include "port_watchdog.h"
 #include "hooks/Events.h"
+#include "netplay/lobby.h"
 
 #include <libultraship/libultraship.h>
 #include <libultraship/bridge/eventsbridge.h>
@@ -867,6 +868,10 @@ void PortPushFrame(void)
 	 * The one-frame lag is small and consistent — document it in the
 	 * feature's env-var contract. */
 	portRenderDocOnFrame(static_cast<unsigned int>(sFrameCount));
+
+	/* Connect-code netplay lobby: rendezvous keepalives, hole punching, match
+	 * setup. Returns immediately when idle. */
+	port_lobby_tick();
 
 	{
 		static auto sStartTime = std::chrono::steady_clock::now();
