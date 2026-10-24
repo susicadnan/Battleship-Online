@@ -94,6 +94,18 @@ direct connect.
 - The socket is closed when the battle ends; a rematch goes through the
   lobby again.
 
+## Disconnects
+
+`sys/netstate.c` stalls when it would have to predict deeper than the
+snapshot ring. Ten seconds of consecutive stall (no input from the peer at
+all) means they are gone: `syNetPeerAbortMatch` stops the session, the
+lobby shows "Match ended: connection lost", and `portSCManagerRequestResetTo`
+drops the player back into the VS menu.
+
+## Hosting the rendezvous server
+
+See `docs/netplay_hosting.md`.
+
 ## In-match HUD
 
 `port/netplay/overlay.cpp` draws a one-line window in the top left while a
