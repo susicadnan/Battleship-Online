@@ -60,7 +60,7 @@ void PortNetplayDrawPanel()
 
 	ImGui::SeparatorText("Match settings");
 	bool quick = CVarGetInteger("gNetplay.QuickMatch", 0) != 0;
-	if (ImGui::Checkbox("Quick match (pick here and jump straight into the battle)", &quick)) {
+	if (ImGui::Checkbox("Quick match through a relay server (pick here, skip the menus)", &quick)) {
 		CVarSetInteger("gNetplay.QuickMatch", quick ? 1 : 0);
 		CVarSave();
 	}

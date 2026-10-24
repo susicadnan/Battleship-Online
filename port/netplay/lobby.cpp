@@ -269,6 +269,11 @@ void start_bootstrap()
 	 * run in lockstep. gNetplay.QuickMatch=1 is the old path (picks on the
 	 * Netplay page, straight into the battle). */
 	int menu_mode = CVarGetInteger("gNetplay.QuickMatch", 0) == 0 ? 1 : 0;
+	/* A host that guests join (direct Host/Join, friend codes) always runs
+	 * the group session through the game's menus (host_start), so a guest
+	 * that went for a quick match would wait for a MATCH_CONFIG that never
+	 * comes. Quick match is only for the relay-server pairing. */
+	if (g.direct || g.code_join) menu_mode = 1;
 	/* netpeer owns the socket from here on (it keeps it between games). */
 	syNetPeerLobbyConfigure(g.sock, &g.peer, g.is_host ? 1 : 0, delay, session_from_match(), seed, host_f, client_f, stage,
 	                        stocks, minutes, menu_mode);
