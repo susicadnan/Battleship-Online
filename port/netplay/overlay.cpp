@@ -17,6 +17,7 @@ extern "C" unsigned syNetPeerGetPingMs(void);
 extern "C" unsigned syNetPeerGetInputDelay(void);
 extern "C" int syNetPeerGetLocalAdvantage(void);
 extern "C" int syNetPeerGetAdvantageDelta(void);
+extern "C" int syNetPeerCheckSpectating(void);
 extern "C" void syNetStateGetStats(unsigned *rollbacks, unsigned *resim_ticks, unsigned *max_depth, unsigned *stalls,
                                    unsigned *timesync_skips);
 extern "C" unsigned syNetInputGetRemoteLag(void);
@@ -49,6 +50,15 @@ class NetplayOverlay : public Ship::GuiWindow {
 	void UpdateElement() override {}
 
 	void DrawElement() override {
+		if (syNetPeerCheckSpectating()) {
+			/* A spectator never predicts, so the rollback numbers say nothing. */
+			unsigned ping = syNetPeerGetPingMs();
+			ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "WATCHING");
+			ImGui::SameLine();
+			if (ping != 0) ImGui::TextDisabled("| ping %u ms to the host", ping);
+			else ImGui::TextDisabled("| you play when it is your turn");
+			return;
+		}
 		unsigned rollbacks = 0, resim = 0, max_depth = 0, stalls = 0, timesync = 0;
 		syNetStateGetStats(&rollbacks, &resim, &max_depth, &stalls, &timesync);
 

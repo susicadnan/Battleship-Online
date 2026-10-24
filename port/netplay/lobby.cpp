@@ -15,6 +15,7 @@
 #include <ctime>
 #include <random>
 #include <string>
+#include <vector>
 
 extern "C" void port_log(const char *fmt, ...);
 /* decomp/src/sys/netpeer.c (C) */
@@ -29,6 +30,9 @@ extern "C" int syNetPeerCheckMenuMode(void);
 extern "C" void syNetPeerRematchRequest(uint8_t my_fighter);
 extern "C" int syNetPeerRematchStep(void);
 extern "C" int syNetPeerCheckPeerWantsRematch(void);
+extern "C" void syNetPeerHostConfigure(intptr_t sock, uint32_t delay, uint32_t session_id, uint32_t seed);
+extern "C" int syNetPeerHostAddMember(const PortNetAddr *addr, const char *code);
+extern "C" void syNetPeerHostStartSession(void);
 
 namespace {
 
@@ -39,6 +43,16 @@ constexpr int kPunchSettleFrames = 30;  /* keep punching this long after both si
 constexpr int kServerTimeoutFrames = 600;
 constexpr int kPunchRelayFrames = 300;  /* 5 s without a direct path: ask the server to relay */
 constexpr int kPunchTimeoutFrames = 900;
+constexpr int kMaxGuests = 3;
+constexpr int kGuestKeepaliveFrames = 30; /* host -> each waiting guest */
+constexpr int kGuestTimeoutFrames = 600;
+
+struct Guest
+{
+	PortNetAddr addr{};
+	std::string code;
+	int silent = 0;
+};
 
 struct Lobby
 {
@@ -57,6 +71,9 @@ struct Lobby
 	bool force_relay = false;  /* SSB64_LOBBY_FORCE_RELAY=1: never punch, to test the relay */
 	bool auto_rematch = false; /* SSB64_LOBBY_AUTO_REMATCH=1: ask for a rematch a second after each game */
 	int peer_fighter = 0;
+	int auto_start = 0;        /* SSB64_LOBBY_AUTOSTART=N: the host starts once N people are in */
+	bool host_punch = false;   /* hosting with an address to punch towards */
+	std::vector<Guest> guests; /* HOSTING */
 	intptr_t sock = -1;
 	int frames = 0;            /* frames in the current state */
 	int since_welcome = 0;
@@ -147,6 +164,28 @@ void send_punch()
 	                       (g.punch_replies > 0 ? " 1" : " 0"));
 }
 
+/* Host -> a guest: we hear you (seen = 1). */
+void send_punch_to(intptr_t sock, const PortNetAddr &to)
+{
+	std::string line = std::string(kMagic) + " PUNCH direct " + g.code + " " + std::to_string(my_fighter()) + " 1";
+	port_netsock_sendto(sock, line.data(), (int)line.size(), &to);
+}
+
+Guest *find_guest(const PortNetAddr &addr)
+{
+	for (auto &guest : g.guests)
+		if (guest.addr.ip == addr.ip && guest.addr.port == addr.port) return &guest;
+	return nullptr;
+}
+
+void hosting_status()
+{
+	std::string s = "Hosting on UDP port " + std::to_string(CVarGetInteger("gNetplay.Port", 7000));
+	if (g.guests.empty()) s += ", waiting for players to join";
+	else s += ", " + std::to_string(g.guests.size() + 1) + " people in. Press Start when everyone is here";
+	g.status = s;
+}
+
 void send_relay_request()
 {
 	send_text(&g.server, std::string(kMagic) + " RELAY " + g.match_id);
@@ -177,7 +216,9 @@ void start_bootstrap()
 	                        stocks, minutes, menu_mode);
 	g.sock = -1;
 	set_state(PORT_LOBBY_BOOTSTRAP, std::string(g.relayed ? "Relayed. " : "Connected. ") +
-	                                    (g.is_host ? "Sending match settings" : "Waiting for match settings"));
+	                                    (g.is_host ? "Sending match settings"
+	                                     : menu_mode ? "Waiting for the host to start"
+	                                                 : "Waiting for match settings"));
 }
 
 /* Split a datagram into fields. */
@@ -223,6 +264,25 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 		g.relayed = false;
 		g.peer_saw_us = false;
 		set_state(PORT_LOBBY_PUNCHING, std::string("Found ") + (n >= 7 ? f[6] : "peer") + ", connecting...");
+	} else if (std::strcmp(f[1], "PUNCH") == 0 && n >= 4 && g.state == PORT_LOBBY_HOSTING) {
+		Guest *guest = find_guest(from);
+		if (guest == nullptr) {
+			if ((int)g.guests.size() >= kMaxGuests) {
+				send_text(&from, std::string(kMagic) + " FULL");
+				return;
+			}
+			g.guests.push_back(Guest{ from, f[3], 0 });
+			guest = &g.guests.back();
+			port_log("SSB64 Lobby: %s joined (%d in)\n", f[3], (int)g.guests.size() + 1);
+			hosting_status();
+		}
+		guest->silent = 0;
+		send_punch_to(g.sock, from);
+	} else if (std::strcmp(f[1], "FULL") == 0) {
+		if (g.state == PORT_LOBBY_PUNCHING) {
+			set_state(PORT_LOBBY_FAILED, "That session is full (four people)");
+			close_socket();
+		}
 	} else if (std::strcmp(f[1], "PUNCH") == 0 && n >= 3) {
 		if (g.state != PORT_LOBBY_PUNCHING || g.relayed) return;
 		if (!g.direct && g.match_id != f[2]) return;
@@ -252,13 +312,29 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 
 void pump()
 {
-	char buf[256];
+	char buf[512];
 	for (;;) {
 		PortNetAddr from;
 		int got = port_netsock_recvfrom(g.sock, buf, sizeof(buf) - 1, &from);
 		if (got <= 0) break;
+		/* A guest that is already waiting for the start pings us (binary):
+		 * that keeps it in, nothing else to do with it here. */
+		if (g.state == PORT_LOBBY_HOSTING) {
+			if (Guest *guest = find_guest(from)) guest->silent = 0;
+		}
 		handle_datagram(buf, got, from);
 	}
+}
+
+void host_start()
+{
+	uint32_t delay = (uint32_t)CVarGetInteger("gNetplay.Delay", 2);
+	uint32_t seed = (uint32_t)std::time(nullptr) | 1u;
+	syNetPeerHostConfigure(g.sock, delay, 1, seed);
+	for (auto &guest : g.guests) syNetPeerHostAddMember(&guest.addr, guest.code.c_str());
+	g.sock = -1; /* netpeer's from here on */
+	syNetPeerHostStartSession();
+	set_state(PORT_LOBBY_BOOTSTRAP, "Starting: " + std::to_string(g.guests.size() + 1) + " people");
 }
 
 } // namespace
@@ -283,6 +359,9 @@ static void lobby_autostart_from_env()
 	if (const char *rematch = std::getenv("SSB64_LOBBY_AUTO_REMATCH")) g.auto_rematch = std::atoi(rematch) != 0;
 	if (const char *quick = std::getenv("SSB64_LOBBY_QUICK")) CVarSetInteger("gNetplay.QuickMatch", std::atoi(quick));
 	if (const char *stage = std::getenv("SSB64_LOBBY_STAGE")) CVarSetInteger("gNetplay.Stage", std::atoi(stage));
+	if (const char *mode = std::getenv("SSB64_LOBBY_GROUP_MODE")) CVarSetInteger("gNetplay.GroupMode", std::atoi(mode));
+	if (const char *preset = std::getenv("SSB64_LOBBY_PRESET")) CVarSetInteger("gNetplay.Preset", std::atoi(preset));
+	if (const char *autostart = std::getenv("SSB64_LOBBY_AUTOSTART")) g.auto_start = std::atoi(autostart);
 	if (const char *code = std::getenv("SSB64_LOBBY_CONNECT")) {
 		port_lobby_connect(code);
 	} else if (const char *direct = std::getenv("SSB64_LOBBY_DIRECT")) {
@@ -313,6 +392,23 @@ extern "C" void port_lobby_tick(void)
 		}
 		return;
 
+	case PORT_LOBBY_HOSTING:
+		if (g.host_punch && g.frames % kPunchInterval == 0) send_punch();
+		if (g.frames % kGuestKeepaliveFrames == 0) {
+			for (auto &guest : g.guests) send_punch_to(g.sock, guest.addr);
+		}
+		for (auto &guest : g.guests) guest.silent++;
+		pump();
+		for (size_t i = 0; i < g.guests.size();) {
+			if (g.guests[i].silent > kGuestTimeoutFrames) {
+				port_log("SSB64 Lobby: %s went quiet, removed\n", g.guests[i].code.c_str());
+				g.guests.erase(g.guests.begin() + (long)i);
+				hosting_status();
+			} else i++;
+		}
+		if (g.auto_start > 0 && (int)g.guests.size() + 1 >= g.auto_start && g.frames > 60) host_start();
+		return;
+
 	case PORT_LOBBY_PUNCHING:
 		if (g.frames % kPunchInterval == 0 && !g.force_relay) send_punch();
 		if (!g.direct && g.frames > kPunchRelayFrames && g.frames % 60 == 0 && !(g.punch_replies > 0 && g.peer_saw_us)) {
@@ -333,7 +429,7 @@ extern "C" void port_lobby_tick(void)
 		if (rc > 0)
 			set_state(PORT_LOBBY_IN_MATCH, syNetPeerCheckMenuMode() ? "Connected. Pick your fighters in the game's VS menu"
 			                                                        : "Match starting");
-		else if (rc < 0) set_state(PORT_LOBBY_FAILED, "Match setup timed out");
+		else if (rc < 0 && g.state == PORT_LOBBY_BOOTSTRAP) set_state(PORT_LOBBY_FAILED, "Match setup timed out");
 		return;
 	}
 
@@ -382,7 +478,7 @@ extern "C" void port_lobby_set_name(const char *name)
 extern "C" void port_lobby_connect(const char *friend_code)
 {
 	if (g.state == PORT_LOBBY_PUNCHING || g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_IN_MATCH ||
-	    g.state == PORT_LOBBY_POST_MATCH)
+	    g.state == PORT_LOBBY_POST_MATCH || g.state == PORT_LOBBY_HOSTING)
 		return;
 	refresh_code();
 	if (!port_netsock_parse_addr(CVarGetString("gNetplay.Server", ""), &g.server)) {
@@ -412,11 +508,12 @@ extern "C" void port_lobby_connect(const char *friend_code)
 extern "C" void port_lobby_connect_direct(const char *host_port, int is_host)
 {
 	if (g.state == PORT_LOBBY_PUNCHING || g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_IN_MATCH ||
-	    g.state == PORT_LOBBY_POST_MATCH)
+	    g.state == PORT_LOBBY_POST_MATCH || g.state == PORT_LOBBY_HOSTING)
 		return;
 	refresh_code();
-	PortNetAddr peer;
-	if (!port_netsock_parse_addr(host_port, &peer)) {
+	PortNetAddr peer{};
+	bool have_peer = host_port != nullptr && host_port[0] != '\0' && port_netsock_parse_addr(host_port, &peer);
+	if (!have_peer && !is_host) {
 		set_state(PORT_LOBBY_FAILED, "Direct address must look like 1.2.3.4:7000");
 		return;
 	}
@@ -429,8 +526,64 @@ extern "C" void port_lobby_connect_direct(const char *host_port, int is_host)
 	g.match_id = "direct";
 	g.punch_replies = 0;
 	g.settle = 0;
+	if (g.is_host) {
+		/* The host does not need anyone's address: guests come to it. One
+		 * typed in is still punched towards, which opens the host's own
+		 * NAT for that guest. */
+		g.host_punch = have_peer;
+		g.guests.clear();
+		set_state(PORT_LOBBY_HOSTING, "Hosting");
+		hosting_status();
+		g.frames = 0;
+		return;
+	}
 	set_state(PORT_LOBBY_PUNCHING, std::string("Connecting directly to ") + host_port + "...");
 	g.frames = 0;
+}
+
+extern "C" void port_lobby_host_start(void)
+{
+	if (g.state != PORT_LOBBY_HOSTING || g.guests.empty()) return;
+	host_start();
+}
+
+extern "C" int port_lobby_host_guest_count(void)
+{
+	return g.state == PORT_LOBBY_HOSTING ? (int)g.guests.size() : 0;
+}
+
+extern "C" const char *port_lobby_host_guest_code(int index)
+{
+	if (g.state != PORT_LOBBY_HOSTING || index < 0 || index >= (int)g.guests.size()) return "";
+	return g.guests[(size_t)index].code.c_str();
+}
+
+/* From sys/netpeer.c on the host once the session is running: a datagram
+ * that is not game traffic, i.e. someone's lobby PUNCH. Late joiners get in
+ * at the next character select. */
+extern "C" void port_lobby_host_foreign_datagram(intptr_t sock, const uint8_t *buffer, int size, const PortNetAddr *from)
+{
+	char text[512];
+	char *f[8];
+	if (size <= 0 || size >= (int)sizeof(text)) return;
+	std::memcpy(text, buffer, (size_t)size);
+	text[size] = '\0';
+	int n = split(text, f, 8);
+	if (n < 4 || std::strcmp(f[0], kMagic) != 0 || std::strcmp(f[1], "PUNCH") != 0) return;
+	if (syNetPeerHostAddMember(from, f[3]) < 0) {
+		std::string full = std::string(kMagic) + " FULL";
+		port_netsock_sendto(sock, full.data(), (int)full.size(), from);
+		return;
+	}
+	send_punch_to(sock, *from);
+}
+
+extern "C" int port_lobby_group_mode(void) { return CVarGetInteger("gNetplay.GroupMode", 0); }
+extern "C" int port_lobby_preset(void) { return CVarGetInteger("gNetplay.Preset", 1); }
+
+extern "C" void port_lobby_notify_round(void)
+{
+	if (g.state == PORT_LOBBY_BOOTSTRAP) set_state(PORT_LOBBY_IN_MATCH, "Connected");
 }
 
 extern "C" void port_lobby_cancel(void)
@@ -449,6 +602,7 @@ extern "C" void port_lobby_cancel(void)
 		send_text(&g.server, std::string(kMagic) + " LEAVE " + g.code);
 	close_socket();
 	g.friend_code.clear();
+	g.guests.clear();
 	set_state(PORT_LOBBY_IDLE, "Not connected");
 }
 

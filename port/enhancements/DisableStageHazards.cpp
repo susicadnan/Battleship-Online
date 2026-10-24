@@ -167,6 +167,9 @@ struct BattleKey {
 bool sWasInBattle = false;
 bool sDisableHazardsForBattle = false;
 BattleKey sBattleKey = {};
+/* Netplay group sessions set this for everyone in the session (-1 = not in
+ * one; then the user's own setting applies as usual). */
+int sNetplayHazardsOff = -1;
 
 bool IsHazardControlledBattleScene(unsigned char scene) {
     return scene == kSceneVSBattle ||
@@ -330,7 +333,25 @@ void ApplyHazardDisable() {
 
 } // namespace
 
+extern "C" void port_netplay_set_hazards_off(int is_off) {
+    sNetplayHazardsOff = is_off;
+}
+
+/* Inside the VS battle tick (scVSBattleFuncUpdate, rollback re-simulations
+ * included) during a netplay session: the stage's hazards are switched off
+ * as part of the simulation, before its objects run, so every machine and
+ * every re-simulated tick sees the same thing. The per-frame path below
+ * would mutate the game between ticks, at a point rollback cannot see. */
+extern "C" void port_enhancement_stage_hazards_sim_tick(void) {
+    if (sNetplayHazardsOff == 1 && IsBattleStage()) {
+        ApplyHazardDisable();
+    }
+}
+
 extern "C" void port_enhancement_stage_hazards_tick(void) {
+    if (sNetplayHazardsOff >= 0) {
+        return;
+    }
     LatchBattleSettingIfNeeded();
 
     if (sWasInBattle && sDisableHazardsForBattle) {

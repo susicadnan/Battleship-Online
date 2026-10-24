@@ -11,7 +11,7 @@
  * Settings (CVars, saved with the rest): gNetplay.Name, gNetplay.Tag (the
  * four digits after '#', generated once), gNetplay.Server ("host:port" of
  * the rendezvous server), gNetplay.Port (local UDP port), gNetplay.Fighter,
- * gNetplay.Stage, gNetplay.Delay.
+ * gNetplay.Stage, gNetplay.Delay, gNetplay.GroupMode, gNetplay.Preset.
  */
 #pragma once
 
@@ -30,6 +30,7 @@ typedef enum PortLobbyState
 	PORT_LOBBY_IN_MATCH,
 	PORT_LOBBY_POST_MATCH,    /* game over, connection kept; Rematch or Leave */
 	PORT_LOBBY_FAILED,
+	PORT_LOBBY_HOSTING,       /* direct host: taking guests (up to 3) until Start */
 } PortLobbyState;
 
 /* Once per frame, from the game loop. Cheap when idle. */
@@ -41,13 +42,24 @@ void port_lobby_set_name(const char *name);
 
 /* Register with the server (if not already) and ask to play friend_code. */
 void port_lobby_connect(const char *friend_code);
-/* LAN / port-forwarded play without a server: both sides enter the other's
- * ip:port, one as host and one as client. */
+/* LAN / port-forwarded play without a server. The host opens a session
+ * on its UDP port (host_port optional: an address to punch towards, for a
+ * host behind a NAT); up to three guests join with the host's ip:port. The
+ * host presses Start (port_lobby_host_start) when everyone is in; anyone
+ * joining later gets in at the next character select. */
 void port_lobby_connect_direct(const char *host_port, int is_host);
+void port_lobby_host_start(void);
+int port_lobby_host_guest_count(void);              /* HOSTING: guests in so far */
+const char *port_lobby_host_guest_code(int index);  /* HOSTING: their codes */
 void port_lobby_cancel(void);
 
 int port_lobby_state(void);
 const char *port_lobby_status(void);   /* one line for the UI */
+
+/* Group sessions (sys/netpeer.c): the host's settings for each round. */
+int port_lobby_group_mode(void);  /* 0 = 1v1 winner stays on, 1 = everyone plays */
+int port_lobby_preset(void);      /* 1 = Dream Land, no items, no hazards */
+void port_lobby_notify_round(void);
 
 /* From sys/netpeer.c when a match ends abnormally (peer gone, quit). */
 void port_lobby_notify_match_over(const char *reason);

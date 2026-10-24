@@ -15,6 +15,8 @@ extern "C" int syNetMenuCheckOnlinePanelScene(void);
 extern "C" int syNetMenuCheckActive(void);
 extern "C" int syNetPeerCheckActive(void);
 extern "C" unsigned syNetPeerGetPingMs(void);
+extern "C" int syNetPeerGetMemberInfo(int member, const char **code, int *slot, int *queue_pos, int *is_me);
+extern "C" int syNetPeerCheckGroupHost(void);
 
 namespace ssb64 {
 
@@ -65,10 +67,25 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 		ImGui::SameLine();
 		ImGui::TextDisabled("  you are %s, UDP port %d", port_lobby_code(), CVarGetInteger("gNetplay.Port", 7000));
 
-		if (state == PORT_LOBBY_IN_MATCH) {
+		if (state == PORT_LOBBY_HOSTING) {
+			ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.6f, 1.0f), "%s", port_lobby_status());
+			ImGui::BulletText("%s (you, host)", port_lobby_code());
+			for (int i = 0; i < port_lobby_host_guest_count(); i++) ImGui::BulletText("%s", port_lobby_host_guest_code(i));
+			DrawGroupSettings();
+			ImGui::BeginDisabled(port_lobby_host_guest_count() == 0);
+			if (ImGui::Button("Start")) port_lobby_host_start();
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel")) port_lobby_cancel();
+			ImGui::SetWindowFontScale(1.0f);
+			return;
+		}
+		if (state == PORT_LOBBY_IN_MATCH || (state == PORT_LOBBY_BOOTSTRAP && DrawRoster(false))) {
 			unsigned ping = syNetPeerGetPingMs();
-			if (ping != 0) ImGui::Text("Connected, ping %u ms. Both controllers are live in these menus.", ping);
-			else ImGui::TextUnformatted("Connected. Both controllers are live in these menus.");
+			if (ping != 0) ImGui::Text("Connected, ping %u ms.", ping);
+			else ImGui::TextUnformatted("Connected.");
+			DrawRoster(true);
+			if (syNetPeerCheckGroupHost()) DrawGroupSettings();
 			if (ImGui::Button("Leave")) port_lobby_cancel();
 			ImGui::SetWindowFontScale(1.0f);
 			return;
@@ -85,24 +102,28 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 			ImGui::EndDisabled();
 		}
 
+		ImGui::BeginDisabled(busy);
+		if (ImGui::Button("Host")) port_lobby_connect_direct("", 1);
+		ImGui::EndDisabled();
+		if (ImGui::IsItemHovered() && !busy) {
+			ImGui::SetTooltip("Open a session on your UDP port for up to three friends,\n"
+			                  "then press Start. Your port must be reachable (same LAN, or a port forward).");
+		}
+		ImGui::SameLine();
+		ImGui::TextDisabled("or");
+		ImGui::SameLine();
 		ImGui::SetNextItemWidth(170.0f);
-		if (ImGui::InputText("Friend's IP:port", mDirect, sizeof(mDirect), ImGuiInputTextFlags_CharsNoBlank)) {
+		if (ImGui::InputText("Host's IP:port", mDirect, sizeof(mDirect), ImGuiInputTextFlags_CharsNoBlank)) {
 			CVarSetString("gNetplay.Direct", mDirect);
 			CVarSave();
 		}
 		ImGui::SameLine();
 		ImGui::BeginDisabled(busy);
-		if (ImGui::Button("Host")) port_lobby_connect_direct(mDirect, 1);
-		ImGui::SameLine();
 		if (ImGui::Button("Join")) port_lobby_connect_direct(mDirect, 0);
 		ImGui::EndDisabled();
 		if (busy) {
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel")) port_lobby_cancel();
-		}
-		if (ImGui::IsItemHovered() && !busy) {
-			ImGui::SetTooltip("One of you presses Host, the other Join, both with the other's address.\n"
-			                  "The host needs its UDP port reachable (same LAN, or a port forward).");
 		}
 
 		int delay = CVarGetInteger("gNetplay.Delay", 2);
@@ -122,6 +143,48 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 	}
 
   private:
+	/* Who plays which port and who is watching (sys/netpeer.c's round).
+	 * draw = false only asks whether there is a roster yet. */
+	bool DrawRoster(bool draw) {
+		bool any = false;
+		for (int m = 0; m < 4; m++) {
+			const char *code = "";
+			int slot = -1, queue_pos = -1, is_me = 0;
+			if (!syNetPeerGetMemberInfo(m, &code, &slot, &queue_pos, &is_me)) continue;
+			any = true;
+			if (!draw) continue;
+			const char *name = code[0] != '\0' ? code : (m == 0 ? "host" : "guest");
+			if (slot >= 0) {
+				ImGui::BulletText("P%d  %s%s", slot + 1, name, is_me ? "  (you)" : "");
+			} else if (queue_pos >= 0) {
+				ImGui::BulletText("watching, %s  %s%s", queue_pos == 0 ? "next up" : "in line", name,
+				                  is_me ? "  (you)" : "");
+			} else {
+				ImGui::BulletText("joins at the next character select  %s%s", name, is_me ? "  (you)" : "");
+			}
+		}
+		return any;
+	}
+
+	/* The host's choices; they apply from the next character select. */
+	void DrawGroupSettings() {
+		int mode = CVarGetInteger("gNetplay.GroupMode", 0);
+		if (ImGui::RadioButton("1v1, winner stays on", mode == 0)) {
+			CVarSetInteger("gNetplay.GroupMode", 0);
+			CVarSave();
+		}
+		ImGui::SameLine();
+		if (ImGui::RadioButton("Everyone plays", mode == 1)) {
+			CVarSetInteger("gNetplay.GroupMode", 1);
+			CVarSave();
+		}
+		bool preset = CVarGetInteger("gNetplay.Preset", 1) != 0;
+		if (ImGui::Checkbox("Dream Land, no items, no hazards", &preset)) {
+			CVarSetInteger("gNetplay.Preset", preset ? 1 : 0);
+			CVarSave();
+		}
+	}
+
 	char mDirect[32] = {};
 	char mFriend[24] = {};
 };

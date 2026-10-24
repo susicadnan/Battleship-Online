@@ -187,6 +187,11 @@ can diverge; the battle still uses the host's state, but one side could end
 up on a different screen. A divergence that keeps one side out of the
 battle shows as "the other player did not start the match".
 
+Groups of up to four (host as hub, spectators, winner stays on): see
+`docs/netplay_groups.md`. Direct connect is now: the host presses Host (no
+address needed), guests Join with the host's address, the host presses
+Start.
+
 ## In-match HUD
 
 `port/netplay/overlay.cpp` draws a one-line window in the top left while a

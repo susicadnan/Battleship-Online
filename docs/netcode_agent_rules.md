@@ -37,6 +37,7 @@ Build rollback netcode in phases:
 - `port/netstate_section.h` (force-included by CMake into the decomp TUs, minus `SSB64_STATE_EXCLUDE_REGEX`), `port/netstate_optin.h`, `port/netstate_section.ld` (GCC) and `port/stubs/netstate_section.c` group every decomp global into one snapshotable section.
 - `port/coroutine.h` gained `port_coroutine_snapshot/restore` (POSIX + Android backends; Win32 fibers unsupported) and `port/stubs/n64_stubs.c` keeps a registry of GObj coroutines (`port/netstate_coro.h`) with deferred destruction while rollback is active.
 - `src/sys/netinput.c` has a resimulation mode (local slots replay `sSYNetInputHistory`, no hardware poll), `syNetInputSaveState/RestoreState`, and `syNetInputSetRemoteInput()` requests a rollback when a confirmed remote input contradicts a published prediction.
+- Group sessions (up to four members through the host, spectators, winner stays on, rounds): `docs/netplay_groups.md`. `sys/netpeer.c` keeps a member table and per-port bookkeeping; any change to who plays which port goes through a round (`ROUND_CONFIG`/`READY`/`ROUND_START`), never mid-phase. A spectator (`syNetPeerCheckSpectating`) must never predict: `syNetStateRunTick` holds its ticks on confirmed input.
 - `src/sc/sccommon/scvsbattle.c` starts/stops the netstate session with the other net sessions and skips packets/trace/replay side effects while resimulating; `src/sys/taskman.c` also stops any session when the arena is reused.
 
 ## Architecture Rules
