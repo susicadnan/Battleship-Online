@@ -23,6 +23,7 @@ typedef SOCKET port_sock_t;
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 typedef int port_sock_t;
 #define PORT_SOCK_INVALID (-1)
@@ -256,5 +257,16 @@ void port_netsock_sleep_us(uint32_t usecs)
 	Sleep((usecs + 999) / 1000);
 #else
 	usleep(usecs);
+#endif
+}
+
+uint32_t port_netsock_now_ms(void)
+{
+#ifdef _WIN32
+	return (uint32_t)GetTickCount64();
+#else
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint32_t)((uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u);
 #endif
 }

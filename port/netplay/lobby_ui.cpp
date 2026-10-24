@@ -78,6 +78,11 @@ void PortNetplayDrawPanel()
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Frames your own inputs are held back so both sides apply them together.\n"
 		                  "Lower = more rollbacks, higher = more lag. 2 is a good default.");
+	bool overlay = CVarGetInteger("gNetplay.Overlay", 1) != 0;
+	if (ImGui::Checkbox("Show ping / rollback HUD during matches", &overlay)) {
+		CVarSetInteger("gNetplay.Overlay", overlay ? 1 : 0);
+		CVarSave();
+	}
 
 	ImGui::SeparatorText("Play a friend (connect code)");
 	ImGui::SetNextItemWidth(260.0f);

@@ -42,6 +42,9 @@ int port_netsock_recvfrom(intptr_t sock, void *buf, int cap, PortNetAddr *from);
 
 void port_netsock_sleep_us(uint32_t usecs);
 
+/* Monotonic milliseconds, for round-trip timing. */
+uint32_t port_netsock_now_ms(void);
+
 #ifdef __cplusplus
 }
 #endif

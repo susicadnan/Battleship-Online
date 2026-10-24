@@ -34,6 +34,7 @@
 #include "bridge/framebuffer_capture.h"
 #include "enhancements/enhancements.h"
 #include "first_run.h"
+#include "netplay/overlay.h"
 #include "gui/PortMenu.h"
 #ifdef PORT_HIRES_ENABLED
 #include "hires/HiResHook.h"
@@ -913,6 +914,10 @@ static int PortInitImpl(int argc, char* argv[]) {
 			port_log("SSB64: attaching Port menu ...\n");
 			gui->SetMenu(std::make_shared<ssb64::PortMenu>());
 			port_log("SSB64: Port menu attached\n");
+			/* In-match netplay HUD (draws nothing outside a session). */
+			auto overlay = ssb64::MakeNetplayOverlay();
+			gui->AddGuiWindow(overlay);
+			overlay->Show();
 		}
 
 #if !defined(__ANDROID__) && !defined(BATTLESHIP_UWP)
