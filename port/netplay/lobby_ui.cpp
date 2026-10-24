@@ -58,6 +58,15 @@ void PortNetplayDrawPanel()
 	if (ImGui::IsItemClicked()) ImGui::SetClipboardText(port_lobby_code());
 
 	ImGui::SeparatorText("Match settings");
+	bool quick = CVarGetInteger("gNetplay.QuickMatch", 0) != 0;
+	if (ImGui::Checkbox("Quick match (pick here and jump straight into the battle)", &quick)) {
+		CVarSetInteger("gNetplay.QuickMatch", quick ? 1 : 0);
+		CVarSave();
+	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Off: after connecting, both players use the game's own VS menu, character select\n"
+		                  "and stage select together, with both controllers live. The picks below are ignored.");
+	ImGui::BeginDisabled(!quick);
 	int fighter = clamp(CVarGetInteger("gNetplay.Fighter", 0), 0, (int)(sizeof(kFighters) / sizeof(kFighters[0])) - 1);
 	ImGui::SetNextItemWidth(180.0f);
 	if (ImGui::Combo("Your fighter", &fighter, kFighters, (int)(sizeof(kFighters) / sizeof(kFighters[0])))) {
@@ -82,6 +91,7 @@ void PortNetplayDrawPanel()
 		CVarSetInteger("gNetplay.TimeLimit", minutes);
 		CVarSave();
 	}
+	ImGui::EndDisabled();
 	int delay = clamp(CVarGetInteger("gNetplay.Delay", 2), 0, 8);
 	ImGui::SetNextItemWidth(180.0f);
 	if (ImGui::SliderInt("Input delay (frames)", &delay, 0, 8)) {
@@ -111,7 +121,7 @@ void PortNetplayDrawPanel()
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
-	ImGui::BeginDisabled(port_lobby_state() == PORT_LOBBY_IDLE);
+	ImGui::BeginDisabled(port_lobby_state() == PORT_LOBBY_IDLE || port_lobby_state() == PORT_LOBBY_IN_MATCH);
 	if (ImGui::Button("Cancel")) {
 		port_lobby_cancel();
 	}
@@ -133,6 +143,9 @@ void PortNetplayDrawPanel()
 
 	ImGui::SeparatorText("Status");
 	ImGui::TextWrapped("%s", port_lobby_status());
+	if (port_lobby_state() == PORT_LOBBY_IN_MATCH) {
+		if (ImGui::Button("Leave the match")) port_lobby_cancel();
+	}
 	if (port_lobby_state() == PORT_LOBBY_POST_MATCH) {
 		if (port_lobby_peer_wants_rematch()) {
 			ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Your opponent wants a rematch!");

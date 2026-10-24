@@ -35,6 +35,7 @@
 #include "enhancements/enhancements.h"
 #include "first_run.h"
 #include "netplay/overlay.h"
+#include "netplay/ingame_ui.h"
 #include "gui/PortMenu.h"
 #ifdef PORT_HIRES_ENABLED
 #include "hires/HiResHook.h"
@@ -918,6 +919,10 @@ static int PortInitImpl(int argc, char* argv[]) {
 			auto overlay = ssb64::MakeNetplayOverlay();
 			gui->AddGuiWindow(overlay);
 			overlay->Show();
+			/* Online panel over the game's mode select / VS menu. */
+			auto online = ssb64::MakeNetplayIngamePanel();
+			gui->AddGuiWindow(online);
+			online->Show();
 		}
 
 #if !defined(__ANDROID__) && !defined(BATTLESHIP_UWP)

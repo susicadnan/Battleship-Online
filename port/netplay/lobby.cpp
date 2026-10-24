@@ -21,9 +21,11 @@ extern "C" void port_log(const char *fmt, ...);
 extern "C" void syNetPeerLobbyConfigure(intptr_t sock, const PortNetAddr *peer, int is_host, uint32_t delay,
                                         uint32_t session_id, uint32_t seed, uint8_t host_fighter,
                                         uint8_t client_fighter, uint32_t stage_kind, uint32_t stocks,
-                                        uint32_t time_minutes);
+                                        uint32_t time_minutes, int menu_mode);
 extern "C" int syNetPeerLobbyStep(void);
 extern "C" void syNetPeerLobbyAbort(void);
+extern "C" void syNetPeerAbortMatch(const char *reason);
+extern "C" int syNetPeerCheckMenuMode(void);
 extern "C" void syNetPeerRematchRequest(uint8_t my_fighter);
 extern "C" int syNetPeerRematchStep(void);
 extern "C" int syNetPeerCheckPeerWantsRematch(void);
@@ -166,9 +168,13 @@ void start_bootstrap()
 	uint32_t seed = (uint32_t)std::time(nullptr) | 1u;
 	uint32_t stocks = (uint32_t)CVarGetInteger("gNetplay.Stocks", 3);
 	uint32_t minutes = (uint32_t)CVarGetInteger("gNetplay.TimeLimit", 0);
+	/* Default: both players pick everything in the game's own VS menus,
+	 * run in lockstep. gNetplay.QuickMatch=1 is the old path (picks on the
+	 * Netplay page, straight into the battle). */
+	int menu_mode = CVarGetInteger("gNetplay.QuickMatch", 0) == 0 ? 1 : 0;
 	/* netpeer owns the socket from here on (it keeps it between games). */
 	syNetPeerLobbyConfigure(g.sock, &g.peer, g.is_host ? 1 : 0, delay, session_from_match(), seed, host_f, client_f, stage,
-	                        stocks, minutes);
+	                        stocks, minutes, menu_mode);
 	g.sock = -1;
 	set_state(PORT_LOBBY_BOOTSTRAP, std::string(g.relayed ? "Relayed. " : "Connected. ") +
 	                                    (g.is_host ? "Sending match settings" : "Waiting for match settings"));
@@ -275,6 +281,8 @@ static void lobby_autostart_from_env()
 	if (const char *tag = std::getenv("SSB64_LOBBY_TAG")) CVarSetString("gNetplay.Tag", tag);
 	if (const char *relay = std::getenv("SSB64_LOBBY_FORCE_RELAY")) g.force_relay = std::atoi(relay) != 0;
 	if (const char *rematch = std::getenv("SSB64_LOBBY_AUTO_REMATCH")) g.auto_rematch = std::atoi(rematch) != 0;
+	if (const char *quick = std::getenv("SSB64_LOBBY_QUICK")) CVarSetInteger("gNetplay.QuickMatch", std::atoi(quick));
+	if (const char *stage = std::getenv("SSB64_LOBBY_STAGE")) CVarSetInteger("gNetplay.Stage", std::atoi(stage));
 	if (const char *code = std::getenv("SSB64_LOBBY_CONNECT")) {
 		port_lobby_connect(code);
 	} else if (const char *direct = std::getenv("SSB64_LOBBY_DIRECT")) {
@@ -322,7 +330,9 @@ extern "C" void port_lobby_tick(void)
 
 	case PORT_LOBBY_BOOTSTRAP: {
 		int rc = syNetPeerLobbyStep();
-		if (rc > 0) set_state(PORT_LOBBY_IN_MATCH, "Match starting");
+		if (rc > 0)
+			set_state(PORT_LOBBY_IN_MATCH, syNetPeerCheckMenuMode() ? "Connected. Pick your fighters in the game's VS menu"
+			                                                        : "Match starting");
 		else if (rc < 0) set_state(PORT_LOBBY_FAILED, "Match setup timed out");
 		return;
 	}
@@ -425,6 +435,15 @@ extern "C" void port_lobby_connect_direct(const char *host_port, int is_host)
 
 extern "C" void port_lobby_cancel(void)
 {
+	if (g.state == PORT_LOBBY_IN_MATCH) {
+		/* Ends the session on both sides (the peer sees "connection lost")
+		 * and sends us back to the VS menu; netpeer closes its socket. */
+		syNetPeerAbortMatch("you left the match");
+		g.sock = -1;
+		g.friend_code.clear();
+		set_state(PORT_LOBBY_IDLE, "Not connected");
+		return;
+	}
 	if (g.state == PORT_LOBBY_BOOTSTRAP || g.state == PORT_LOBBY_POST_MATCH) syNetPeerLobbyAbort();
 	else if (g.sock >= 0 && !g.direct && g.state != PORT_LOBBY_IDLE)
 		send_text(&g.server, std::string(kMagic) + " LEAVE " + g.code);

@@ -89,10 +89,10 @@ direct connect.
 
 - The relay costs the server the match's bandwidth (~10 KB/s per player)
   and adds a hop of latency; there is no limit on concurrent relays yet.
-- Fighters and stage are picked on the Netplay page, not in the CSS. Only
-  the host's stage pick counts.
-- Stocks and time limit are the only rules the host can set; items are off
-  and handicap/team settings are fixed by `syNetPeerMakeBootstrapMetadata`.
+- In quick-match mode (`gNetplay.QuickMatch=1`) fighters and stage are
+  picked on the Netplay page and only the host's stage pick counts; stocks
+  and time limit are the only rules, items are off. The default mode uses
+  the game's own menus instead (see below).
 
 ## Rematch
 
@@ -119,32 +119,61 @@ drops the player back into the VS menu.
 
 See `docs/netplay_hosting.md`.
 
-## Next: picking in the real character select
+## Playing through the game's own menus (default)
 
-Today both players pick fighter and stage on the Netplay page and the host's
-`MATCH_CONFIG` carries them. The Slippi-like version runs the game's own
-CSS (`decomp/src/mn/mnplayers/mnplayersvs.c`, scene `nSCKindPlayersVS`) and
-stage select (`mn/mnmaps/mnmaps.c`) with both players' inputs, so the menus
-themselves decide the battle state. Plan:
+Unless `gNetplay.QuickMatch` is on, connecting does not start a battle: it
+puts both players into the game's VS menu with **both controllers live**,
+and from there they pick rules, fighters and the stage exactly as on a
+couch. Pieces:
 
-1. Menus run in **lockstep**, not rollback: `syNetStateRunTick` already
-   stalls when the remote is too far behind; for menu scenes make it wait
-   whenever the remote frame for the current tick has not arrived (netpeer
-   active, netstate inactive). Input delay hides the wait on a good link.
-2. The menu scenes' taskman setups name `syControllerFuncRead` as the
-   controller function (`dMNVSModeTaskmanSetup` etc.). Route them through a
-   wrapper that calls `syNetInputFuncRead` while a netplay session is active,
-   so the remote player's cursor moves from network frames.
-3. After punching, the host's `MATCH_CONFIG` carries only the seed and
-   `scene_kind = nSCKindPlayersVS`; both reset into the CSS with netinput
-   on. The CSS writes `gSCManagerBattleState` identically on both sides and
-   proceeds to the battle; `syNetPeerStartVSSession` picks the session up.
-4. Rematch then returns both to the CSS instead of re-sending the config.
+- `decomp/src/sys/netmenu.c` runs the menus in **lockstep**. While a session
+  is active `sys/taskman.c` calls `syNetMenuFuncRead` instead of the scene's
+  controller function. Each tick it polls the hardware once, queues the
+  local frame for tick + delay, sends it, and only when the peer's frame for
+  this tick has arrived publishes both into `gSYControllerDevices` (host =
+  port 1, client = port 2, ports 3 and 4 empty) and lets the scene update
+  run; otherwise the same frame is drawn again. Ten seconds without the
+  peer's input ends the session (`syNetPeerAbortMatch`). Input packets are
+  the battle's (`netpeer.c`), so the delay and the HUD ping work the same.
+- The lobby's `MATCH_CONFIG` carries the host's VS rules
+  (`gSCManagerTransferBattleState`) and its unlock/fighter masks, so both
+  sides enter the VS menu from the same state and see the same roster (the
+  client's masks are put back when the session ends). Both seed the RNG
+  with the match seed, then `portSCManagerRequestResetTo(nSCKindVSMode)`;
+  lockstep ticks start with the first controller read in that scene.
+- When the menus reach `nSCKindVSBattle`, `syNetPeerStartVSSession` stops
+  the lockstep, moves to a new session id (base + phase, so late menu
+  packets can never be taken for battle input) and runs the blocking
+  `MATCH_CONFIG`/`READY`/`START` exchange before any fighter is built: the
+  host sends the battle state its menus produced, the client overwrites its
+  own with it. From there it is the rollback battle of
+  `docs/rollback_design.md`.
+- When the battle ends, `syNetPeerStopVSSession` repeats the last input
+  packet a few times (nothing retransmits once the battle is gone), moves to
+  the next phase and restarts the lockstep, so the results screen and the
+  next character select are shared too. There is no separate rematch flow
+  in this mode: the players just play again.
+- `port/netplay/ingame_ui.cpp` draws the **Online** panel over the mode
+  select and VS menu: your code and UDP port, a friend's `ip:port` with
+  Host/Join (and a connect-code field when a server is set), the input
+  delay, the status line, and Leave while connected.
 
-Things that will bite: menu code that reads `gSYControllerMain` (player 1
-only) or polls the hardware directly; `gcSleepCurrentGObjThread`-style
-waits that depend on frame timing; and anything in the menus that uses
-`syUtilsGetRandom` before the seed is applied.
+Why lockstep and not rollback here: menus are not in the state section and
+run GObj threads with frame-timed waits; a rollback could not restore them.
+The cost is one network round trip of latency on menu input, which the
+input delay mostly hides.
+
+Headless check: `SSB64_NETMENU_BOT=1` makes the local player press a fixed
+A / stick up / A / START pattern that walks the VS menu and the CSS into a
+battle; with `SSB64_LOBBY_DIRECT` on two instances, both logs should show
+the same `entering scene` sequence and identical `figh=` hashes during the
+battle.
+
+Known gaps: port enhancements that change menu behaviour (music select,
+CPU level 9, boot-to-CSS) must be set the same on both sides or the menus
+can diverge; the battle still uses the host's state, but one side could end
+up on a different screen. A divergence that keeps one side out of the
+battle shows as "the other player did not start the match".
 
 ## In-match HUD
 
