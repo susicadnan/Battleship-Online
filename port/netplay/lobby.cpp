@@ -52,6 +52,7 @@ constexpr int kGuestTimeoutFrames = 600;
 constexpr int kRequestInterval = 60;
 constexpr int kRequestExpireFrames = 300;
 constexpr int kMaxRequests = 8;
+constexpr int kPumpMaxDatagrams = 64;
 constexpr int kAcceptedPunchFrames = 900;  /* host -> an accepted friend's endpoints */
 constexpr int kStunInterval = 30;
 constexpr int kStunTries = 10;
@@ -293,6 +294,8 @@ int split(char *text, char **fields, int max_fields)
 	return n;
 }
 
+bool is_own_code(const char *text);
+
 void handle_datagram(char *text, int len, const PortNetAddr &from)
 {
 	text[len] = '\0';
@@ -322,6 +325,10 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 		g.peer_saw_us = false;
 		set_state(PORT_LOBBY_PUNCHING, std::string("Found ") + (n >= 7 ? f[6] : "peer") + ", connecting...");
 	} else if (std::strcmp(f[1], "PUNCH") == 0 && n >= 4 && g.state == PORT_LOBBY_HOSTING) {
+		/* Our own punch come back (a friend's candidate that is really us,
+		 * e.g. their loopback on the same port): not a guest, and answering
+		 * it would bounce between us and ourselves forever. */
+		if (is_own_code(f[3])) return;
 		Guest *guest = find_guest(from);
 		/* The same friend from another of our endpoints (see netpeer's
 		 * syNetPeerHostAddMember): keep the address they reach us from now. */
@@ -383,7 +390,8 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 void pump()
 {
 	char buf[512];
-	for (;;) {
+	/* Bounded, so nothing that keeps arriving can hold the frame up. */
+	for (int i = 0; i < kPumpMaxDatagrams; i++) {
 		PortNetAddr from;
 		int got = port_netsock_recvfrom(g.sock, buf, sizeof(buf) - 1, &from);
 		if (got <= 0) break;
@@ -438,6 +446,22 @@ bool normalize_code(const char *text, std::string *out)
 	return true;
 }
 
+bool is_own_code(const char *text)
+{
+	std::string code;
+	return normalize_code(text, &code) && code == g.code;
+}
+
+/* One of the addresses our own socket answers on: sending a punch there
+ * only reaches ourselves. */
+bool is_own_addr(const PortNetAddr &a)
+{
+	if (g.public_ep.ip != 0 && a.ip == g.public_ep.ip && a.port == g.public_ep.port) return true;
+	for (auto &own : port_signal_local_addrs(g.bound_port))
+		if (a.ip == own.ip && a.port == own.port) return true;
+	return false;
+}
+
 std::string my_endpoints()
 {
 	std::string out;
@@ -463,7 +487,7 @@ std::vector<PortNetAddr> parse_endpoints(const char *text)
 		size_t comma = all.find(',', pos);
 		std::string one = all.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
 		PortNetAddr a;
-		if (port_netsock_parse_addr(one.c_str(), &a) && a.ip != 0 && a.port != 0) out.push_back(a);
+		if (port_netsock_parse_addr(one.c_str(), &a) && a.ip != 0 && a.port != 0 && !is_own_addr(a)) out.push_back(a);
 		if (comma == std::string::npos) break;
 		pos = comma + 1;
 	}
@@ -975,6 +999,7 @@ extern "C" void port_lobby_host_foreign_datagram(intptr_t sock, const uint8_t *b
 	text[size] = '\0';
 	int n = split(text, f, 8);
 	if (n < 4 || std::strcmp(f[0], kMagic) != 0 || std::strcmp(f[1], "PUNCH") != 0) return;
+	if (is_own_code(f[3])) return; /* our own punch come back, see handle_datagram */
 	if (syNetPeerHostAddMember(from, f[3]) < 0) {
 		std::string full = std::string(kMagic) + " FULL";
 		port_netsock_sendto(sock, full.data(), (int)full.size(), from);
