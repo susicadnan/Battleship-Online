@@ -32,6 +32,11 @@ void port_enhancement_stage_hazards_tick(void);
 // The caller passes the same value it copies into `*button_tap`.
 void port_enhancement_c_stick_smash(int player_index, unsigned short* button_hold, unsigned short* button_tap, signed char* stick_x, signed char* stick_y, unsigned short tap_pre_remap);
 
+// D-Pad → smash/aerial attack remap: the same translation as above, fed by the
+// N64 D-pad, which the stock gamepad layout drives from the right stick.
+// Runs before port_enhancement_dpad_jump and consumes the D-pad bits.
+void port_enhancement_dpad_smash(int player_index, unsigned short* button_hold, unsigned short* button_tap, signed char* stick_x, signed char* stick_y, unsigned short tap_pre_remap);
+
 // D-Pad → C-button remap. Companion to the C-Stick smash option for players
 // who also have tap-jump disabled and would otherwise lose their jump input.
 // `tap_pre_remap` has the same meaning as above.
@@ -89,6 +94,7 @@ const char* TapJumpCVarName(int playerIndex);
 const char* HitboxViewCVarName();
 const char* StageHazardsDisabledCVarName();
 const char* CStickSmashCVarName(int playerIndex);
+const char* DPadSmashCVarName(int playerIndex);
 const char* DPadJumpCVarName(int playerIndex);
 const char* AnalogRemapCVarName(int playerIndex);
 const char* AnalogRemapDeadzoneCVarName(int playerIndex);

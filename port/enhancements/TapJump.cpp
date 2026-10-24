@@ -13,11 +13,15 @@ constexpr const char* kTapJumpCVars[PORT_ENHANCEMENT_MAX_PLAYERS] = {
 
 } // namespace
 
+// On by default (jump is on X/Y in the stock gamepad layout). This is the
+// local player's preference only: in a VS battle the game reads the flag that
+// travels with each player's input instead (sys/netinput.c), so peers with
+// different settings still simulate the same thing.
 extern "C" int port_enhancement_tap_jump_disabled(int playerIndex) {
     if (playerIndex < 0 || playerIndex >= PORT_ENHANCEMENT_MAX_PLAYERS) {
         return 0;
     }
-    return CVarGetInteger(kTapJumpCVars[playerIndex], 0) != 0;
+    return CVarGetInteger(kTapJumpCVars[playerIndex], 1) != 0;
 }
 
 namespace ssb64 {

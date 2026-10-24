@@ -30,6 +30,7 @@
 #include <ship/resource/ResourceType.h>
 
 #include "app_paths.h"
+#include "controller_defaults.h"
 #include "bridge/audio_bridge.h"
 #include "bridge/framebuffer_capture.h"
 #include "enhancements/enhancements.h"
@@ -876,7 +877,24 @@ static int PortInitImpl(int argc, char* argv[]) {
 	// outlive sContext and their destructors run after spdlog::shutdown,
 	// crashing in SPDLOG_DEBUG calls inside libultraship destructors.
 	{
-		auto controlDeck = std::make_shared<LUS::ControlDeck>();
+		auto controlDeck = std::make_shared<LUS::ControlDeck>(
+			std::vector<CONTROLLERBUTTONS_T>(), ssb64::MakeControllerDefaultMappings(),
+			std::unordered_map<CONTROLLERBUTTONS_T, std::string>({
+				{ BTN_A, "A" },
+				{ BTN_B, "B" },
+				{ BTN_L, "L" },
+				{ BTN_R, "R" },
+				{ BTN_Z, "Z" },
+				{ BTN_START, "Start" },
+				{ BTN_CLEFT, "CLeft" },
+				{ BTN_CRIGHT, "CRight" },
+				{ BTN_CUP, "CUp" },
+				{ BTN_CDOWN, "CDown" },
+				{ BTN_DLEFT, "DLeft" },
+				{ BTN_DRIGHT, "DRight" },
+				{ BTN_DUP, "DUp" },
+				{ BTN_DDOWN, "DDown" },
+			}));
 		if (!sContext->InitControlDeck(controlDeck)) { port_log("SSB64: InitControlDeck failed\n"); return 1; }
 	}
 	port_log("SSB64: ControlDeck OK\n");

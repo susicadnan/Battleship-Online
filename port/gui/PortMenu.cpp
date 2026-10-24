@@ -1206,7 +1206,20 @@ void PortMenu::AddMenuSettings() {
         AddWidget(path, fmt::format("Disable Tap Jump (P{})", p + 1), WIDGET_CVAR_CHECKBOX)
             .CVar(enhancements::TapJumpCVarName(p))
             .RaceDisable(false)
-            .Options(CheckboxOptions().Tooltip("Disables jumping by pushing up on the analog stick."));
+            .Options(CheckboxOptions()
+                         .Tooltip("Disables jumping by pushing up on the analog stick. On by default; "
+                                  "in online matches each player's own setting applies to them.")
+                         .DefaultValue(true));
+
+        AddWidget(path, fmt::format("Right Stick Attacks (P{})", p + 1), WIDGET_CVAR_CHECKBOX)
+            .CVar(enhancements::DPadSmashCVarName(p))
+            .RaceDisable(false)
+            .Options(CheckboxOptions()
+                         .Tooltip("Turns N64 D-Pad inputs into instant smash attacks (aerials in the air) "
+                                  "during matches. The default gamepad layout puts the right stick on the "
+                                  "D-Pad, so this makes it an attack stick; menus still read it as a D-Pad. "
+                                  "Takes precedence over D-Pad to Jump.")
+                         .DefaultValue(true));
 
         AddWidget(path, fmt::format("C-Stick Smash (P{})", p + 1), WIDGET_CVAR_CHECKBOX)
             .CVar(enhancements::CStickSmashCVarName(p))
