@@ -169,6 +169,18 @@ battle; with `SSB64_LOBBY_DIRECT` on two instances, both logs should show
 the same `entering scene` sequence and identical `figh=` hashes during the
 battle.
 
+Things that had to be made deterministic for this to hold, and are worth
+knowing when touching menu code: `syUtilsRandTime*` (wall clock on the
+console) draws from the seeded RNG while a session is active, and the RNG
+is re-seeded on the first shared tick of every menu phase; the wait for the
+peer's input is a coroutine yield inside the controller read, because
+skipping the update while still drawing ran the menus' display callbacks
+(which move the CSS tokens) a different number of times on each side; the
+battle state the host sends keeps `is_reset_players` TRUE only at the start
+of a session. A match does not end on exactly the same tick on both
+machines (the GAME SET sequence), which is why sudden death restarts the
+tick space and handshake like a new battle.
+
 Known gaps: port enhancements that change menu behaviour (music select,
 CPU level 9, boot-to-CSS) must be set the same on both sides or the menus
 can diverge; the battle still uses the host's state, but one side could end
