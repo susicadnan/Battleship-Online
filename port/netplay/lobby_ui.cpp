@@ -70,6 +70,18 @@ void PortNetplayDrawPanel()
 		CVarSetInteger("gNetplay.Stage", stage);
 		CVarSave();
 	}
+	int stocks = clamp(CVarGetInteger("gNetplay.Stocks", 3), 0, 5);
+	ImGui::SetNextItemWidth(180.0f);
+	if (ImGui::SliderInt("Stocks (host picks, 0 = none)", &stocks, 0, 5)) {
+		CVarSetInteger("gNetplay.Stocks", stocks);
+		CVarSave();
+	}
+	int minutes = clamp(CVarGetInteger("gNetplay.TimeLimit", 0), 0, 20);
+	ImGui::SetNextItemWidth(180.0f);
+	if (ImGui::SliderInt("Time limit, minutes (host picks, 0 = none)", &minutes, 0, 20)) {
+		CVarSetInteger("gNetplay.TimeLimit", minutes);
+		CVarSave();
+	}
 	int delay = clamp(CVarGetInteger("gNetplay.Delay", 2), 0, 8);
 	ImGui::SetNextItemWidth(180.0f);
 	if (ImGui::SliderInt("Input delay (frames)", &delay, 0, 8)) {
