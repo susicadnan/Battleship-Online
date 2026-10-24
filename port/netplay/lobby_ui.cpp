@@ -108,16 +108,12 @@ void PortNetplayDrawPanel()
 	}
 
 	ImGui::SeparatorText("Play a friend (connect code)");
-	ImGui::SetNextItemWidth(260.0f);
-	if (ImGui::InputText("Rendezvous server", sServer, sizeof(sServer))) {
-		CVarSetString("gNetplay.Server", sServer);
-		CVarSave();
-	}
+	ImGui::TextDisabled("Enter their code and press Play; they press Accept (or enter yours). Same as the Online panel in VS Mode.");
 	ImGui::SetNextItemWidth(160.0f);
 	ImGui::InputText("Friend's code", sFriend, sizeof(sFriend), ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank);
-	ImGui::BeginDisabled(busy());
-	if (ImGui::Button("Connect")) {
-		port_lobby_connect(sFriend);
+	ImGui::BeginDisabled(busy() || port_lobby_state() == PORT_LOBBY_SEEKING);
+	if (ImGui::Button("Play")) {
+		port_lobby_play_code(sFriend);
 	}
 	ImGui::EndDisabled();
 	ImGui::SameLine();
@@ -126,20 +122,44 @@ void PortNetplayDrawPanel()
 		port_lobby_cancel();
 	}
 	ImGui::EndDisabled();
-
-	ImGui::SeparatorText("Direct connect (LAN or port forwarding)");
-	ImGui::SetNextItemWidth(200.0f);
-	if (ImGui::InputText("Friend's ip:port", sDirect, sizeof(sDirect), ImGuiInputTextFlags_CharsNoBlank)) {
-		CVarSetString("gNetplay.Direct", sDirect);
-		CVarSave();
+	for (int i = 0; i < port_lobby_request_count(); i++) {
+		ImGui::PushID(i);
+		ImGui::Text("%s wants to play", port_lobby_request_code(i));
+		ImGui::SameLine();
+		if (ImGui::Button("Accept")) port_lobby_request_answer(i, 1);
+		ImGui::SameLine();
+		if (ImGui::Button("No")) port_lobby_request_answer(i, 0);
+		ImGui::PopID();
 	}
-	ImGui::BeginDisabled(busy());
-	if (ImGui::Button("Host")) port_lobby_connect_direct(sDirect, 1);
-	ImGui::SameLine();
-	if (ImGui::Button("Join")) port_lobby_connect_direct(sDirect, 0);
-	ImGui::EndDisabled();
-	ImGui::SameLine();
-	ImGui::TextDisabled("Local UDP port: %d", CVarGetInteger("gNetplay.Port", 7000));
+	port_lobby_listen();
+
+	/* Not needed for normal play: a relay for connections that cannot punch
+	 * through (docs/netplay_hosting.md) and LAN / port-forward by address. */
+	if (ImGui::CollapsingHeader("Advanced (optional)")) {
+		ImGui::SeparatorText("Relay server (optional, leave blank)");
+		ImGui::SetNextItemWidth(260.0f);
+		if (ImGui::InputText("Relay server", sServer, sizeof(sServer))) {
+			CVarSetString("gNetplay.Server", sServer);
+			CVarSave();
+		}
+		ImGui::BeginDisabled(busy() || sServer[0] == '\0');
+		if (ImGui::Button("Connect through relay server")) {
+			port_lobby_connect(sFriend);
+		}
+		ImGui::EndDisabled();
+
+		ImGui::SeparatorText("Direct connect (LAN or port forwarding)");
+		ImGui::SetNextItemWidth(200.0f);
+		if (ImGui::InputText("Friend's ip:port", sDirect, sizeof(sDirect), ImGuiInputTextFlags_CharsNoBlank)) {
+			CVarSetString("gNetplay.Direct", sDirect);
+			CVarSave();
+		}
+		ImGui::BeginDisabled(busy());
+		if (ImGui::Button("Host")) port_lobby_connect_direct(sDirect, 1);
+		ImGui::SameLine();
+		if (ImGui::Button("Join")) port_lobby_connect_direct(sDirect, 0);
+		ImGui::EndDisabled();
+	}
 
 	ImGui::SeparatorText("Status");
 	ImGui::TextWrapped("%s", port_lobby_status());
