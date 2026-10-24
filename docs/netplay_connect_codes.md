@@ -119,6 +119,33 @@ drops the player back into the VS menu.
 
 See `docs/netplay_hosting.md`.
 
+## Next: picking in the real character select
+
+Today both players pick fighter and stage on the Netplay page and the host's
+`MATCH_CONFIG` carries them. The Slippi-like version runs the game's own
+CSS (`decomp/src/mn/mnplayers/mnplayersvs.c`, scene `nSCKindPlayersVS`) and
+stage select (`mn/mnmaps/mnmaps.c`) with both players' inputs, so the menus
+themselves decide the battle state. Plan:
+
+1. Menus run in **lockstep**, not rollback: `syNetStateRunTick` already
+   stalls when the remote is too far behind; for menu scenes make it wait
+   whenever the remote frame for the current tick has not arrived (netpeer
+   active, netstate inactive). Input delay hides the wait on a good link.
+2. The menu scenes' taskman setups name `syControllerFuncRead` as the
+   controller function (`dMNVSModeTaskmanSetup` etc.). Route them through a
+   wrapper that calls `syNetInputFuncRead` while a netplay session is active,
+   so the remote player's cursor moves from network frames.
+3. After punching, the host's `MATCH_CONFIG` carries only the seed and
+   `scene_kind = nSCKindPlayersVS`; both reset into the CSS with netinput
+   on. The CSS writes `gSCManagerBattleState` identically on both sides and
+   proceeds to the battle; `syNetPeerStartVSSession` picks the session up.
+4. Rematch then returns both to the CSS instead of re-sending the config.
+
+Things that will bite: menu code that reads `gSYControllerMain` (player 1
+only) or polls the hardware directly; `gcSleepCurrentGObjThread`-style
+waits that depend on frame timing; and anything in the menus that uses
+`syUtilsGetRandom` before the seed is applied.
+
 ## In-match HUD
 
 `port/netplay/overlay.cpp` draws a one-line window in the top left while a
