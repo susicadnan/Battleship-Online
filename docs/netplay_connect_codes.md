@@ -25,10 +25,17 @@ rollback. Companion to `docs/rollback_design.md` (the simulation side) and
 3. When the server has both `JOIN`s it sends each side `PEER <role> <public
    ip:port> <match id> <peer fighter> <peer code>`. Host is the lexically
    smaller code. Both leave the server's table; a rematch registers again.
-4. Both send `PUNCH <match id> ...` to the other's public endpoint every 3
-   frames. The first `PUNCH` that arrives tells us the peer's real endpoint
-   (the NAT may have rewritten the port); we keep punching for 30 more
-   frames so the other side sees ours, then hand the socket to netpeer.
+4. Both send `PUNCH <match id> <code> <fkind> <seen>` to the other's public
+   endpoint every 3 frames. The first `PUNCH` that arrives tells us the
+   peer's real endpoint (the NAT may have rewritten the port); `seen=1`
+   tells the peer its punches reach us. Once both directions are confirmed
+   we keep punching 30 more frames, then hand the socket to netpeer.
+   If either side has no confirmed path after 5 s it sends `RELAY <match
+   id>`; the server answers both with `RELAYED` and from then on forwards
+   every game datagram between the two addresses (idle 20 s ends it). Both
+   sides point netpeer at the server instead of each other; nothing else
+   changes. `SSB64_LOBBY_FORCE_RELAY=1` makes one side never punch, to test
+   it.
 5. `syNetPeerLobbyConfigure` runs the existing bootstrap per frame: host
    sends `MATCH_CONFIG` (stage, both fighters, seed) until `READY`, then
    `START` 30 times; client answers `READY` until `START`. Then both reset
@@ -53,7 +60,11 @@ code>`, `ERROR <text>`. Codes are case-insensitive, `[A-Z0-9]{1,12}#[0-9]{4}`.
 A registration expires 10 s after its last `HELLO`; a code already online
 from another address gets `ERROR code in use`.
 
-Peer ↔ peer, lobby phase: `BSR1 PUNCH <match id> <code> <fkind>`. Anything
+Client → server when punching fails: `RELAY <match id>`; server → both:
+`RELAYED <match id>`, after which non-`BSR1` datagrams from either address
+are forwarded to the other.
+
+Peer ↔ peer, lobby phase: `BSR1 PUNCH <match id> <code> <fkind> <seen>`. Anything
 that is not a `BSR1` line is ignored by the lobby; anything that is not a
 netpeer packet is dropped by netpeer, so the two phases can overlap by a few
 frames without harm.
@@ -76,11 +87,8 @@ direct connect.
 
 ## Not there yet
 
-- No relay fallback: two players behind symmetric NATs cannot connect.
-  Plan: the server forwards `RELAY` datagrams when punching fails after a
-  few seconds.
-- No time-sync between peers: the faster machine stalls when it gets 8
-  frames ahead instead of being slowed gently.
+- The relay costs the server the match's bandwidth (~10 KB/s per player)
+  and adds a hop of latency; there is no limit on concurrent relays yet.
 - Fighters and stage are picked on the Netplay page, not in the CSS. Only
   the host's stage pick counts.
 - The socket is closed when the battle ends; a rematch goes through the

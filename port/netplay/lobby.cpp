@@ -29,8 +29,9 @@ namespace {
 constexpr const char *kMagic = "BSR1";
 constexpr int kHelloInterval = 60;      /* frames between HELLO/JOIN keepalives */
 constexpr int kPunchInterval = 3;
-constexpr int kPunchSettleFrames = 30;  /* keep punching this long after the first reply */
+constexpr int kPunchSettleFrames = 30;  /* keep punching this long after both sides see each other */
 constexpr int kServerTimeoutFrames = 600;
+constexpr int kPunchRelayFrames = 300;  /* 5 s without a direct path: ask the server to relay */
 constexpr int kPunchTimeoutFrames = 900;
 
 struct Lobby
@@ -45,6 +46,9 @@ struct Lobby
 	PortNetAddr peer{};
 	bool is_host = false;
 	bool direct = false;
+	bool relayed = false;      /* game packets go through the server */
+	bool peer_saw_us = false;  /* the peer's PUNCH reported that it has seen ours */
+	bool force_relay = false;  /* SSB64_LOBBY_FORCE_RELAY=1: never punch, to test the relay */
 	int peer_fighter = 0;
 	intptr_t sock = -1;
 	int frames = 0;            /* frames in the current state */
@@ -127,9 +131,18 @@ void send_hello()
 		send_text(&g.server, std::string(kMagic) + " JOIN " + g.code + " " + g.friend_code);
 }
 
+/* PUNCH <match> <code> <fkind> <seen>: seen=1 once the peer's punches reach
+ * us, so each side knows the path works in both directions before handing
+ * the socket to netpeer (which no longer reads lobby messages). */
 void send_punch()
 {
-	send_text(&g.peer, std::string(kMagic) + " PUNCH " + g.match_id + " " + g.code + " " + std::to_string(my_fighter()));
+	send_text(&g.peer, std::string(kMagic) + " PUNCH " + g.match_id + " " + g.code + " " + std::to_string(my_fighter()) +
+	                       (g.punch_replies > 0 ? " 1" : " 0"));
+}
+
+void send_relay_request()
+{
+	send_text(&g.server, std::string(kMagic) + " RELAY " + g.match_id);
 }
 
 uint32_t session_from_match()
@@ -149,7 +162,8 @@ void start_bootstrap()
 	/* netpeer owns the socket from here on (it closes it at battle end). */
 	syNetPeerLobbyConfigure(g.sock, &g.peer, g.is_host ? 1 : 0, delay, session_from_match(), seed, host_f, client_f, stage);
 	g.sock = -1;
-	set_state(PORT_LOBBY_BOOTSTRAP, g.is_host ? "Connected, sending match settings" : "Connected, waiting for match settings");
+	set_state(PORT_LOBBY_BOOTSTRAP, std::string(g.relayed ? "Relayed. " : "Connected. ") +
+	                                    (g.is_host ? "Sending match settings" : "Waiting for match settings"));
 }
 
 /* Split a datagram into fields. */
@@ -192,18 +206,29 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 		g.peer_fighter = std::atoi(f[5]);
 		g.punch_replies = 0;
 		g.settle = 0;
+		g.relayed = false;
+		g.peer_saw_us = false;
 		set_state(PORT_LOBBY_PUNCHING, std::string("Found ") + (n >= 7 ? f[6] : "peer") + ", connecting...");
 	} else if (std::strcmp(f[1], "PUNCH") == 0 && n >= 3) {
-		if (g.state != PORT_LOBBY_PUNCHING) return;
+		if (g.state != PORT_LOBBY_PUNCHING || g.relayed) return;
 		if (!g.direct && g.match_id != f[2]) return;
 		/* The NAT may have rewritten the port: trust where it actually came from. */
 		g.peer = from;
 		if (n >= 5) g.peer_fighter = std::atoi(f[4]);
+		if (n >= 6 && std::atoi(f[5]) != 0) g.peer_saw_us = true;
 		if (g.punch_replies++ == 0) {
 			char buf[32];
 			port_netsock_format_addr(&from, buf, sizeof(buf));
 			set_state(PORT_LOBBY_PUNCHING, std::string("Peer reached at ") + buf);
 		}
+	} else if (std::strcmp(f[1], "RELAYED") == 0 && n >= 3) {
+		if (g.state != PORT_LOBBY_PUNCHING || g.direct || g.match_id != f[2]) return;
+		/* Either side gave up on a direct path; from now on the server
+		 * forwards the game packets between us. */
+		g.relayed = true;
+		g.peer = g.server;
+		set_state(PORT_LOBBY_PUNCHING, "No direct path, relaying through the server");
+		start_bootstrap();
 	} else if (std::strcmp(f[1], "ERROR") == 0) {
 		std::string msg;
 		for (int i = 2; i < n; i++) msg += std::string(i > 2 ? " " : "") + f[i];
@@ -238,6 +263,7 @@ static void lobby_autostart_from_env()
 	if (const char *fighter = std::getenv("SSB64_LOBBY_FIGHTER")) CVarSetInteger("gNetplay.Fighter", std::atoi(fighter));
 	if (const char *delay = std::getenv("SSB64_LOBBY_DELAY")) CVarSetInteger("gNetplay.Delay", std::atoi(delay));
 	if (const char *tag = std::getenv("SSB64_LOBBY_TAG")) CVarSetString("gNetplay.Tag", tag);
+	if (const char *relay = std::getenv("SSB64_LOBBY_FORCE_RELAY")) g.force_relay = std::atoi(relay) != 0;
 	if (const char *code = std::getenv("SSB64_LOBBY_CONNECT")) {
 		port_lobby_connect(code);
 	} else if (const char *direct = std::getenv("SSB64_LOBBY_DIRECT")) {
@@ -269,9 +295,13 @@ extern "C" void port_lobby_tick(void)
 		return;
 
 	case PORT_LOBBY_PUNCHING:
-		if (g.frames % kPunchInterval == 0) send_punch();
+		if (g.frames % kPunchInterval == 0 && !g.force_relay) send_punch();
+		if (!g.direct && g.frames > kPunchRelayFrames && g.frames % 60 == 0 && !(g.punch_replies > 0 && g.peer_saw_us)) {
+			send_relay_request();
+		}
 		pump();
-		if (g.punch_replies > 0 && ++g.settle >= kPunchSettleFrames) {
+		if (g.state != PORT_LOBBY_PUNCHING) return;  /* RELAYED moved us on */
+		if (g.punch_replies > 0 && g.peer_saw_us && ++g.settle >= kPunchSettleFrames) {
 			start_bootstrap();
 		} else if (g.frames > kPunchTimeoutFrames) {
 			set_state(PORT_LOBBY_FAILED, "Could not reach the other player (NAT?)");
@@ -340,6 +370,8 @@ extern "C" void port_lobby_connect_direct(const char *host_port, int is_host)
 	}
 	if (!open_socket()) return;
 	g.direct = true;
+	g.relayed = false;
+	g.peer_saw_us = false;
 	g.is_host = (is_host != 0);
 	g.peer = peer;
 	g.match_id = "direct";
