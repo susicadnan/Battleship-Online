@@ -69,15 +69,6 @@ void portRelocResetPointerTable(void);
  */
 void portRelocInvalidateRange(const void *base, size_t size);
 
-/**
- * Rollback support (port/netstate_host.cpp): a mark is an opaque record of
- * how far the table had been handed out. Restoring it forgets every token
- * minted since, so a re-simulated load mints the same indices again.
- */
-void *portRelocPointerTableSaveMark(void);
-void portRelocPointerTableRestoreMark(const void *mark);
-void portRelocPointerTableFreeMark(void *mark);
-
 #ifdef __cplusplus
 }
 #endif

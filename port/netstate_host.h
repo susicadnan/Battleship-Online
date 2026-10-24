@@ -7,13 +7,16 @@
  * outside them, and it has to travel with them or a restored frame is read
  * through stale eyes:
  *
- *   - lbreloc_byteswap.cpp: which arena addresses have already been
- *     converted to native byte order (sprites, bitmaps, vertices, texels).
- *     Journaled while a session is active; a snapshot is a journal mark.
+ *   - lbreloc_byteswap.cpp: which addresses have already been converted to
+ *     native byte order (sprites, bitmaps, vertices, texels). Journaled
+ *     while a session is active; a snapshot is a journal mark. Only entries
+ *     inside the arena are undone: the intern buffer and other host memory
+ *     are not restored, so their bookkeeping must not be either.
  *   - lbreloc_bridge.cpp: the live reloc-file range registry and the
  *     extern-file bump cursor (a rolled-back tick may have loaded a file).
- *   - resource/RelocPointerTable.cpp: how far the token table was handed
- *     out, so re-simulated loads mint the same tokens instead of leaking.
+ *
+ * The reloc token table is deliberately not rewound; see the note at the
+ * end of resource/RelocPointerTable.cpp.
  *
  * sys/netstate.c owns one blob per snapshot slot and calls these in the
  * same places it copies the arena. Everything here is a no-op cost outside
@@ -21,12 +24,15 @@
  */
 #pragma once
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Bracket a rollback session: begin starts the journals, end drops them. */
-void port_netstate_host_begin(void);
+/* Bracket a rollback session: begin starts the journals (naming the arena
+ * that snapshots restore), end drops them. */
+void port_netstate_host_begin(const void *arena, size_t arena_size);
 void port_netstate_host_end(void);
 
 /* Capture the present into a new heap blob (never NULL). */

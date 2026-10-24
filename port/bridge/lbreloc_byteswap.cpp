@@ -645,6 +645,13 @@ struct FixupJournalEntry
 static std::deque<FixupJournalEntry> sFixupJournal;
 static uint64_t sFixupJournalBase = 0;   // sequence number of sFixupJournal.front()
 static bool sFixupJournalOn = false;
+// Only bookkeeping about bytes that rollback actually restores is undone. A
+// fixup on the intern buffer (fighter models and figatrees, tokenized and
+// byte-swapped in place on first use) during a rolled-back tick stays done,
+// because those bytes stay converted; undoing its entry would make the re-run
+// convert them a second time.
+static uintptr_t sFixupJournalRewindLo = 0;
+static uintptr_t sFixupJournalRewindHi = 0;
 
 static inline void fixup_journal(uint8_t container, uint8_t op, uintptr_t key, uintptr_t value)
 {
@@ -850,6 +857,8 @@ static JournaledAddrSet sChainSlotAddrs(FJ_C_CHAINSLOT);
 
 static void fixup_journal_undo(const FixupJournalEntry &e)
 {
+	if (e.key < sFixupJournalRewindLo || e.key >= sFixupJournalRewindHi)
+		return;
 	switch (e.container) {
 	case FJ_C_STRUCT:    sStructU16Fixups.undo(e); break;
 	case FJ_C_TEXWORDS:  sTexFixupWords.undo(e); break;
@@ -863,14 +872,17 @@ static void fixup_journal_undo(const FixupJournalEntry &e)
 
 /* Journal control, called by port/netstate_host.cpp. Marks are monotonic
  * sequence numbers: Mark() names the present, Rewind(m) undoes everything
- * recorded since m, Trim(m) forgets history older than m once no snapshot
- * can restore to it. Rewind refuses a mark outside the retained window and
- * returns 0 so the caller can report the rollback as failed. */
-extern "C" void portStructFixupsJournalEnable(int on)
+ * recorded since m for addresses in [rewind_base, rewind_base + size) — the
+ * memory rollback restores — Trim(m) forgets history older than m once no
+ * snapshot can restore to it. Rewind refuses a mark outside the retained
+ * window and returns 0 so the caller can report the rollback as failed. */
+extern "C" void portStructFixupsJournalEnable(int on, const void *rewind_base, size_t rewind_size)
 {
 	sFixupJournal.clear();
 	sFixupJournalBase = 0;
 	sFixupJournalOn = (on != 0);
+	sFixupJournalRewindLo = reinterpret_cast<uintptr_t>(rewind_base);
+	sFixupJournalRewindHi = sFixupJournalRewindLo + rewind_size;
 }
 
 extern "C" uint64_t portStructFixupsJournalMark(void)

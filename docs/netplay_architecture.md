@@ -202,7 +202,8 @@ Current debug environment variables:
 - `SSB64_NETPLAY_REMOTE_PLAYER` selects the remote slot index.
 - `SSB64_NETPLAY_BIND` is the local IPv4 bind address in `host:port` form.
 - `SSB64_NETPLAY_PEER` is the remote IPv4 address in `host:port` form.
-- `SSB64_NETPLAY_DELAY` offsets sent input ticks by a fixed frame delay. It defaults to 2.
+- `SSB64_NETPLAY_DELAY` is the local input delay in frames (default 2): the frame polled at tick t is applied at t + delay on both peers and sent tagged with that tick (`netinput.c` local queue).
+- `SSB64_NETINPUT_FAKE=1` replaces hardware input for local slots with a deterministic synthetic pattern, for headless two-instance rollback tests.
 - `SSB64_NETPLAY_SESSION` optionally overrides the packet session id. It defaults to 1.
 - `SSB64_NETPLAY_BOOTSTRAP=1` enables automatic VS match bootstrap.
 - `SSB64_NETPLAY_HOST=1` marks the peer that creates and sends match metadata.

@@ -142,6 +142,16 @@ static std::vector<PortRelocFileRange> sPortRelocFileRanges;
 struct PortRelocBridgeSnapshot
 {
 	std::vector<PortRelocFileRange> ranges;
+	/* The decomp's intern-buffer bookkeeping lives in this C++ TU, so it is
+	 * outside the state section: the {file_id -> address} status buffers
+	 * and the intern heap cursor. The force status buffer is the one that
+	 * bites: every fighter status change loads its animation file into the
+	 * fighter's figatree heap in the arena through it. After a rollback the
+	 * arena holds the previous animation's bytes, but a stale cache entry
+	 * says the new file is already there, so the re-run binds a figatree
+	 * from the wrong bytes and the fighter spins on a zero-length animation
+	 * for the rest of the process. */
+	LBInternBuffer intern_buffer;
 	u32 *extern_file_ids;
 	s32 extern_file_ids_num;
 	s32 extern_file_ids_max;
@@ -152,6 +162,7 @@ extern "C" void *portRelocBridgeSnapshot(void)
 {
 	auto *snap = new PortRelocBridgeSnapshot;
 	snap->ranges = sPortRelocFileRanges;
+	snap->intern_buffer = sLBRelocInternBuffer;
 	snap->extern_file_ids = sLBRelocExternFileIDs;
 	snap->extern_file_ids_num = sLBRelocExternFileIDsNum;
 	snap->extern_file_ids_max = sLBRelocExternFileIDsMax;
@@ -186,6 +197,7 @@ extern "C" void portRelocBridgeRestore(const void *blob)
 			port_dl_range_register(reinterpret_cast<const void *>(r.base), r.size, r.path ? r.path : "reloc?");
 		}
 	}
+	sLBRelocInternBuffer = snap->intern_buffer;
 	sLBRelocExternFileIDs = snap->extern_file_ids;
 	sLBRelocExternFileIDsNum = snap->extern_file_ids_num;
 	sLBRelocExternFileIDsMax = snap->extern_file_ids_max;

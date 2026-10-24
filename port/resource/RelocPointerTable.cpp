@@ -261,50 +261,18 @@ void portRelocResetPointerTable(void)
     sFreeIndices.clear();
 }
 
-/**
- * Rollback marks (port/netstate_host.cpp). A mark records how far the table
- * had been handed out; restoring it forgets every token minted since, so a
- * re-simulated file load mints the same indices again instead of leaking a
- * slot per rolled-back registration. Slots keep their generation: a token
- * minted after the mark fails decode once sNextIndex is rewound, and the
- * next registration of that index bumps the generation anyway.
+/*
+ * Rollback note (sys/netstate.c, port/netstate_host.cpp): this table is
+ * deliberately NOT rewound with the simulation. Tokens are written not only
+ * into the scene arena (which rollback restores) but also into memory that
+ * is not snapshotted — figatree animation data in the intern buffer gets
+ * tokenized in place on first bind, particle banks on setup. Forgetting
+ * tokens minted during a rolled-back tick leaves those words pointing at
+ * cleared slots; the binder then treats them as raw offsets and the fighter
+ * state machine spins on garbage animation data. A token must therefore
+ * stay valid for as long as its pointer does, rollback or not. The cost is
+ * one leaked slot per registration a rolled-back tick repeats, which only
+ * happens on first-use binds and file loads.
  */
-struct PortRelocTableMark {
-    uint32_t next_index;
-    std::vector<uint32_t> free_indices;
-};
-
-void *portRelocPointerTableSaveMark(void)
-{
-    PortRelocTableMark *mark = new PortRelocTableMark;
-    mark->next_index = sNextIndex;
-    mark->free_indices = sFreeIndices;
-    return mark;
-}
-
-void portRelocPointerTableRestoreMark(const void *blob)
-{
-    const PortRelocTableMark *mark = static_cast<const PortRelocTableMark *>(blob);
-    if (mark == nullptr || sSlots == nullptr || mark->next_index > sNextIndex) {
-        return;
-    }
-    for (uint32_t i = mark->next_index; i < sNextIndex; i++) {
-        sSlots[i].ptr = nullptr;
-    }
-    /* Indices that were free at the mark and have been reused since hold
-     * pointers nothing in the restored state references. */
-    for (uint32_t i : mark->free_indices) {
-        if (i < sNextIndex) {
-            sSlots[i].ptr = nullptr;
-        }
-    }
-    sNextIndex = mark->next_index;
-    sFreeIndices = mark->free_indices;
-}
-
-void portRelocPointerTableFreeMark(void *blob)
-{
-    delete static_cast<PortRelocTableMark *>(blob);
-}
 
 } /* extern "C" */
