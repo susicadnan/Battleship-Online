@@ -311,6 +311,12 @@ struct Lookup
 std::shared_ptr<Lookup> resolve_async(const std::string &host)
 {
 	auto lookup = std::make_shared<Lookup>();
+	/* WinSock must be up before getaddrinfo, or the first lookups fail
+	 * and the brokers only connect on the retry five seconds later. */
+	if (!sockets_ready()) {
+		lookup->state = -1;
+		return lookup;
+	}
 	std::thread([lookup, host]() {
 		struct addrinfo hints;
 		std::memset(&hints, 0, sizeof(hints));
