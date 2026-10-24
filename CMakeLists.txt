@@ -546,6 +546,9 @@ if (SSB64_COROUTINE_MASM)
     # WINDOWS_EXPORT_ALL_SYMBOLS' .def generation (objects.txt) expects it,
     # and the link fails with "Couldn't open file ... coroutine_win64.asm.obj".
     add_library(ssb64_coroutine_masm STATIC ${CMAKE_CURRENT_SOURCE_DIR}/port/coroutine_win64.asm)
+    # Only MASM sources: tell CMake how to archive it, or no .lib is produced
+    # and the executable's link fails with LNK1181.
+    set_target_properties(ssb64_coroutine_masm PROPERTIES LINKER_LANGUAGE C)
 endif()
 # port/mods/ (HookManager + SymbolResolver) wraps funchook, which isn't
 # fetched when the mod system is disabled. Drop it so nothing references the
