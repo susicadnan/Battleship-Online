@@ -30,6 +30,10 @@ void port_watchdog_note_yield(void);
 void port_watchdog_note_resume_start(int thread_id);
 void port_watchdog_note_resume_end(int thread_id);
 void port_watchdog_note_frame_end(void);
+/* One game tick (taskman task_update) completed. Lets the watchdog notice a
+ * game coroutine parked forever (frames keep pumping, ticks stop), which the
+ * frame/yield counters above cannot see. */
+void port_watchdog_note_tick(void);
 
 /* Dump a main-thread backtrace to stderr + ssb64.log. Async-signal-safe. */
 void port_dump_backtrace(void);

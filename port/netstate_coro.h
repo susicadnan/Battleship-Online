@@ -22,7 +22,10 @@ typedef struct PortCoroutine PortCoroutine;
 typedef struct PortGObjCoroutineRecord
 {
 	void *thread;          /* OSThread* in the arena that owns it */
-	PortCoroutine *co;     /* heap object, stable address */
+	PortCoroutine *co;     /* heap object, stable address while registered */
+	unsigned serial;       /* unique per registration: a freed coroutine's address
+	                        * is reused by the next calloc, and a snapshot must not
+	                        * mistake the newcomer for the one it saved */
 	int alive;             /* 0 once osDestroyThread ran (kept while rollback is active) */
 	unsigned death_tick;   /* netstate tick at which it died, for collection */
 
@@ -47,6 +50,9 @@ void port_gobj_coroutine_collect(unsigned oldest_tick);
  * are destroyed for real; saved ones get their alive flag back. The caller
  * then restores each saved coroutine's blob. */
 void port_gobj_coroutine_restore_set(const PortGObjCoroutineRecord *saved, int count);
+
+/* 1 if the registry holds exactly this coroutine (address and serial). */
+int port_gobj_coroutine_check(PortCoroutine *co, unsigned serial);
 
 #ifdef __cplusplus
 }

@@ -66,7 +66,15 @@ timer reads it (`ifcommon.c`).
 `sys/taskman.c` **is** included: `gSYTaskmanGeneralHeap` (the bump pointer)
 must rewind with the arena. Its message queues are consistent at the hook
 point (drained before `task_update`, nothing posted until the next
-`PortPushFrame`), so restoring them is a no-op in practice.
+`PortPushFrame`), so restoring them is a no-op in practice. The reverse
+override exists too: `SYNET_HOST_VAR` keeps one variable of an included TU
+out of the section. `dSYTaskmanUpdateCount` needs it — it paces the
+framebuffer swap and feeds the game's own hang detector (debug thread 8),
+and rewinding it froze it, which brought up the hang screen whose
+controller polling deadlocked the game thread. Rule of thumb: counters and
+timing that the *host* reads are `SYNET_HOST_VAR`; identity that the
+*simulation* reads (`sSYNetSyncSpawnSerial` in the excluded `netsync.c`) is
+`SYNET_STATE_VAR`.
 
 ### Why coroutines matter
 

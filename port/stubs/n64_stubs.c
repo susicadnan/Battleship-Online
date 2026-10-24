@@ -59,6 +59,16 @@ extern int atoi(const char *nptr);
 static OSThread *sServiceThreads[PORT_MAX_SERVICE_THREADS];
 static s32 sServiceThreadCount = 0;
 
+/* Innermost OSThread whose coroutine is running (service threads from the
+ * per-frame resume loop, GObj threads nested inside the game thread), for
+ * diagnostics; -1 on the host main loop. */
+static s32 sPortCurrentThreadId = -1;
+
+int port_diag_current_thread(void)
+{
+	return sPortCurrentThreadId;
+}
+
 /* ---- GObj coroutine registry (rollback) ----
  * See port/netstate_coro.h. GObj thread processes (ID >= 100) are recorded
  * here so sys/netstate.c can snapshot their stacks with the arena. While a
@@ -69,6 +79,7 @@ static s32 sServiceThreadCount = 0;
 
 static PortGObjCoroutineRecord sGObjCoroutines[PORT_GOBJ_COROUTINE_MAX];
 static int sGObjCoroutineCount = 0;
+static unsigned sGObjCoroutineSerial = 0;
 static int sGObjCoroutineRollbackActive = 0;
 static unsigned (*sGObjCoroutineTickFn)(void) = NULL;
 
@@ -95,8 +106,17 @@ static void port_gobj_coroutine_register(OSThread *t, PortCoroutine *co)
 	PortGObjCoroutineRecord *rec = &sGObjCoroutines[sGObjCoroutineCount++];
 	rec->thread = t;
 	rec->co = co;
+	rec->serial = ++sGObjCoroutineSerial;
 	rec->alive = 1;
 	rec->death_tick = 0;
+}
+
+static int port_gobj_coroutine_find_serial(PortCoroutine *co, unsigned serial)
+{
+	for (int i = 0; i < sGObjCoroutineCount; i++) {
+		if (sGObjCoroutines[i].co == co && sGObjCoroutines[i].serial == serial) return i;
+	}
+	return -1;
 }
 
 /* Returns 1 when the coroutine was parked (caller must not free it). */
@@ -134,6 +154,11 @@ int port_gobj_coroutine_count(void)
 	return sGObjCoroutineCount;
 }
 
+int port_gobj_coroutine_check(PortCoroutine *co, unsigned serial)
+{
+	return port_gobj_coroutine_find_serial(co, serial) >= 0;
+}
+
 const PortGObjCoroutineRecord *port_gobj_coroutine_get(int index)
 {
 	if (index < 0 || index >= sGObjCoroutineCount) return NULL;
@@ -153,11 +178,17 @@ void port_gobj_coroutine_collect(unsigned oldest_tick)
 void port_gobj_coroutine_restore_set(const PortGObjCoroutineRecord *saved, int count)
 {
 	/* Anything not in the saved set was created after the snapshot: the
-	 * arena no longer references it, so free it. */
+	 * arena no longer references it, so free it. Match on serial as well as
+	 * address: a coroutine created after the snapshot can sit at the exact
+	 * address of one the snapshot saved and has since been freed, and
+	 * restoring the old stack into it corrupts whatever it was doing. */
 	for (int i = sGObjCoroutineCount - 1; i >= 0; i--) {
 		int found = 0;
 		for (int j = 0; j < count; j++) {
-			if (saved[j].co == sGObjCoroutines[i].co) { found = 1; break; }
+			if (saved[j].co == sGObjCoroutines[i].co && saved[j].serial == sGObjCoroutines[i].serial) {
+				found = 1;
+				break;
+			}
 		}
 		if (!found) {
 			port_coroutine_destroy(sGObjCoroutines[i].co);
@@ -168,7 +199,7 @@ void port_gobj_coroutine_restore_set(const PortGObjCoroutineRecord *saved, int c
 	 * alive at the snapshot is resurrected. A saved entry missing from the
 	 * registry was collected too early — that is a netstate bug, say so. */
 	for (int j = 0; j < count; j++) {
-		int i = port_gobj_coroutine_find(saved[j].co);
+		int i = port_gobj_coroutine_find_serial(saved[j].co, saved[j].serial);
 		if (i < 0) {
 			/* A parked (dead) entry that has since been collected needs no
 			 * resurrection; only a live one going missing is a bug. */
@@ -266,7 +297,9 @@ void port_resume_service_threads(void)
 			/* Resume this thread — it will run until it yields again. */
 			t->state = OS_STATE_RUNNING;
 			port_watchdog_note_resume_start((int)t->id);
+			sPortCurrentThreadId = (s32)t->id;
 			port_coroutine_resume((PortCoroutine *)t->port_coroutine);
+			sPortCurrentThreadId = -1;
 			port_watchdog_note_resume_end((int)t->id);
 			if (port_coroutine_is_finished((PortCoroutine *)t->port_coroutine)) {
 				t->state = OS_STATE_STOPPED;
@@ -330,8 +363,11 @@ void osStartThread(OSThread *t)
 	/* Resume the coroutine.  It will run until it yields (at an
 	 * osRecvMesg BLOCK or osStopThread) then return here. */
 	if (t->port_coroutine != NULL) {
+		s32 outer_id = sPortCurrentThreadId;
 		t->state = OS_STATE_RUNNING;
+		sPortCurrentThreadId = (s32)t->id;
 		port_coroutine_resume((PortCoroutine *)t->port_coroutine);
+		sPortCurrentThreadId = outer_id;
 		if (port_coroutine_is_finished((PortCoroutine *)t->port_coroutine)) {
 			t->state = OS_STATE_STOPPED;
 		} else {
@@ -400,6 +436,8 @@ void osCreateMesgQueue(OSMesgQueue *mq, OSMesg *msg, s32 count)
 	mq->msg = msg;
 }
 
+static void port_note_block(OSMesgQueue *mq, s32 kind);
+
 s32 osSendMesg(OSMesgQueue *mq, OSMesg msg, s32 flag)
 {
 	if (mq->validCount >= mq->msgCount) {
@@ -407,6 +445,7 @@ s32 osSendMesg(OSMesgQueue *mq, OSMesg msg, s32 flag)
 			return -1;
 		}
 		/* OS_MESG_BLOCK on full queue — yield until space available. */
+		port_note_block(mq, 1);
 		while (mq->validCount >= mq->msgCount) {
 			if (port_coroutine_in_coroutine()) {
 				port_coroutine_yield();
@@ -425,6 +464,64 @@ s32 osSendMesg(OSMesgQueue *mq, OSMesg msg, s32 flag)
 
 static s32 sRecvDebugCount = 0;
 
+/* The most recent blocking wait of each thread (queue, why) for the
+ * watchdog's tick-stall report: when the game coroutine parks forever, its
+ * entry is the wait that never woke. Service threads block every frame, so
+ * a shared ring would have lost it. */
+#define PORT_BLOCK_TABLE 32
+typedef struct PortBlockRecord
+{
+	void *mq;
+	s32 kind;   /* 0 recv, 1 send */
+	s32 tid;    /* watchdog's active thread id at the time */
+	s32 valid;
+	s32 cap;
+	u32 seq;    /* global order, so the report can show who blocked last */
+} PortBlockRecord;
+static PortBlockRecord sPortBlockTable[PORT_BLOCK_TABLE];
+static s32 sPortBlockTableCount;
+static u32 sPortBlockSeq;
+
+extern int port_watchdog_get_active_thread(void);
+
+static void port_note_block(OSMesgQueue *mq, s32 kind)
+{
+	s32 tid = port_watchdog_get_active_thread();
+	PortBlockRecord *rec = NULL;
+	s32 i;
+
+	for (i = 0; i < sPortBlockTableCount; i++) {
+		if (sPortBlockTable[i].tid == tid) {
+			rec = &sPortBlockTable[i];
+			break;
+		}
+	}
+	if (rec == NULL) {
+		if (sPortBlockTableCount >= PORT_BLOCK_TABLE) return;
+		rec = &sPortBlockTable[sPortBlockTableCount++];
+		rec->tid = tid;
+	}
+	rec->mq = mq;
+	rec->kind = kind;
+	rec->valid = mq->validCount;
+	rec->cap = mq->msgCount;
+	rec->seq = ++sPortBlockSeq;
+}
+
+/* One entry per thread; seqs tell the order. Returns how many. */
+int port_diag_get_block_ring(void **mqs, int *kinds, int *tids, int *valids, int *caps, unsigned *seqs, int max)
+{
+	int n = 0;
+	s32 i;
+	for (i = 0; i < sPortBlockTableCount && n < max; i++) {
+		const PortBlockRecord *rec = &sPortBlockTable[i];
+		mqs[n] = rec->mq; kinds[n] = rec->kind; tids[n] = rec->tid; valids[n] = rec->valid; caps[n] = rec->cap;
+		seqs[n] = rec->seq;
+		n++;
+	}
+	return n;
+}
+
 s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag)
 {
 	/* Non-blocking: return immediately if empty. */
@@ -438,12 +535,19 @@ s32 osRecvMesg(OSMesgQueue *mq, OSMesg *msg, s32 flag)
 			         (void *)mq, (int)mq->validCount, (int)mq->msgCount);
 			sRecvDebugCount++;
 		}
+		port_note_block(mq, 0);
 		while (mq->validCount == 0) {
 			if (port_coroutine_in_coroutine()) {
 				port_coroutine_yield();
 			} else {
 				/* Main thread can't yield — return failure.
 				 * This should only happen during init before coroutines. */
+				static int sNoCoroLogged = 0;
+				if (sNoCoroLogged < 8) {
+					sNoCoroLogged++;
+					port_log("SSB64: osRecvMesg BLOCK on mq=%p outside any coroutine (tid=%d) — returning -1\n",
+					         (void *)mq, port_watchdog_get_active_thread());
+				}
 				return -1;
 			}
 		}

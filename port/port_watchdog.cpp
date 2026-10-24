@@ -47,6 +47,7 @@ namespace {
 
 std::atomic<uint64_t> sYieldCount{0};
 std::atomic<uint64_t> sFrameCount{0};
+std::atomic<uint64_t> sTickCount{0};
 std::atomic<int>      sResumeActiveThreadId{-1};
 std::atomic<uint64_t> sResumeStartMs{0};
 std::atomic<bool>     sShutdown{false};
@@ -392,12 +393,29 @@ const char *ThreadLabel(int id) {
     }
 }
 
+/* sys/netstate.c: where the rollback driver is, for the tick-stall report. */
+extern "C" void syNetStateGetDiag(unsigned *phase, unsigned *tick, unsigned *resim_tick, unsigned *rollbacks,
+                                  unsigned *synctest_runs);
+/* port/stubs/n64_stubs.c: recent blocking message-queue waits. */
+extern "C" int port_diag_get_block_ring(void **mqs, int *kinds, int *tids, int *valids, int *caps, unsigned *seqs,
+                                        int max);
+/* sys/taskman.c: the scene arena, to tell arena queues from static ones. */
+extern "C" void *gPortSceneHeap;
+extern "C" const size_t gPortSceneHeapSize;
+/* sys/controller.c: the controller thread's hand-off state (the game thread
+ * blocks on it every tick). */
+extern "C" void syControllerGetDiag(int *is_update_data, int *is_read_device_data, int *has_wait_update,
+                                    int *events_remain, int *status_update_wait, int *event_queue_valid);
+
 void WatchdogLoop() {
     uint64_t last_yield = sYieldCount.load();
     uint64_t last_frame = sFrameCount.load();
+    uint64_t last_tick  = sTickCount.load();
     uint64_t last_yield_change_ms = NowMs();
     uint64_t last_frame_change_ms = NowMs();
+    uint64_t last_tick_change_ms  = NowMs();
     uint64_t last_log_ms = 0;
+    uint64_t last_tick_log_ms = 0;
 
     while (!sShutdown.load(std::memory_order_acquire)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -405,9 +423,11 @@ void WatchdogLoop() {
         uint64_t now = NowMs();
         uint64_t yc  = sYieldCount.load(std::memory_order_relaxed);
         uint64_t fc  = sFrameCount.load(std::memory_order_relaxed);
+        uint64_t tc  = sTickCount.load(std::memory_order_relaxed);
 
         if (yc != last_yield) { last_yield = yc; last_yield_change_ms = now; }
         if (fc != last_frame) { last_frame = fc; last_frame_change_ms = now; }
+        if (tc != last_tick)  { last_tick = tc;  last_tick_change_ms = now; }
 
         /* Grace period — don't fire alarms during early boot before the
          * first frame has been pumped. */
@@ -415,6 +435,48 @@ void WatchdogLoop() {
 
         uint64_t since_yield_ms = now - last_yield_change_ms;
         uint64_t since_frame_ms = now - last_frame_change_ms;
+        uint64_t since_tick_ms  = now - last_tick_change_ms;
+
+        /* Frames pumping but no tick completing: the game coroutine is
+         * parked on something that never comes (a scene load waits on a
+         * message queue, or rollback resimulation is stuck). Only meaningful
+         * once ticks have started; report once per stall. */
+        if (tc != 0 && since_tick_ms > kHangThresholdMs && since_frame_ms < kHangThresholdMs &&
+            now - last_tick_log_ms > kRepeatLogMs) {
+            last_tick_log_ms = now;
+            unsigned phase = 0, tick = 0, resim_tick = 0, rollbacks = 0, synctest_runs = 0;
+            syNetStateGetDiag(&phase, &tick, &resim_tick, &rollbacks, &synctest_runs);
+            int active_id = sResumeActiveThreadId.load(std::memory_order_relaxed);
+            const char *fmt = "SSB64: WATCHDOG TICK STALL since_tick=%llums frame=%llu ticks=%llu "
+                              "active_tid=%d(%s) netstate: phase=%u(%s) tick=%u resim_tick=%u rollbacks=%u synctest_runs=%u\n";
+            static const char *const kPhases[] = { "idle", "rollback-resim", "synctest-resim", "live-tick", "stall", "timesync" };
+            const char *phase_name = (phase < 6) ? kPhases[phase] : "?";
+            port_log(fmt, (unsigned long long)since_tick_ms, (unsigned long long)fc, (unsigned long long)tc,
+                     active_id, ThreadLabel(active_id), phase, phase_name, tick, resim_tick, rollbacks, synctest_runs);
+            std::fprintf(stderr, fmt, (unsigned long long)since_tick_ms, (unsigned long long)fc,
+                         (unsigned long long)tc, active_id, ThreadLabel(active_id), phase, phase_name, tick,
+                         resim_tick, rollbacks, synctest_runs);
+            std::fflush(stderr);
+
+            /* The recent blocking waits: the one that never woke is the hang. */
+            {
+                void *mqs[32]; int kinds[32], tids[32], valids[32], caps[32]; unsigned seqs[32];
+                int n = port_diag_get_block_ring(mqs, kinds, tids, valids, caps, seqs, 32);
+                uintptr_t lo = reinterpret_cast<uintptr_t>(gPortSceneHeap);
+                uintptr_t hi = lo + gPortSceneHeapSize;
+                for (int i = 0; i < n; i++) {
+                    uintptr_t a = reinterpret_cast<uintptr_t>(mqs[i]);
+                    port_log("SSB64: WATCHDOG   last block of tid=%d(%s): %s mq=%p%s valid=%d cap=%d seq=%u\n",
+                             tids[i], ThreadLabel(tids[i]), kinds[i] == 0 ? "recv" : "send", mqs[i],
+                             (a >= lo && a < hi) ? " (arena)" : "", valids[i], caps[i], seqs[i]);
+                }
+                int upd = 0, rd = 0, wait = 0, remain = 0, status_wait = 0, qvalid = 0;
+                syControllerGetDiag(&upd, &rd, &wait, &remain, &status_wait, &qvalid);
+                port_log("SSB64: WATCHDOG   controller: is_update_data=%d is_read_device_data=%d has_wait_update=%d "
+                         "events_remain=%d status_update_wait=%d event_queue_valid=%d\n",
+                         upd, rd, wait, remain, status_wait, qvalid);
+            }
+        }
 
         /* Require both liveness counters to stall. A running coroutine
          * could yield tens of thousands of times per frame; a frame that
@@ -481,6 +543,14 @@ void WatchdogLoop() {
 }
 
 } // namespace
+
+extern "C" void port_watchdog_note_tick(void) {
+    sTickCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+extern "C" int port_watchdog_get_active_thread(void) {
+    return sResumeActiveThreadId.load(std::memory_order_relaxed);
+}
 
 extern "C" void port_watchdog_init(void) {
     bool expected = false;

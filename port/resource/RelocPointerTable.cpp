@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 #include <spdlog/spdlog.h>
 
@@ -56,6 +57,14 @@ static uint32_t  sCapacity    = 0;
  * tokens don't collide with brand-new ones in test scenarios. Vector is
  * a small overhead per slot but the simplicity is worth it. */
 static std::vector<uint32_t> sFreeIndices;
+
+/* pointer -> its live token. Registering a pointer that already has one
+ * returns that token instead of minting another, so a reloc file that is
+ * loaded again at the same address (rollback re-simulating the tick that
+ * loaded it) ends up with the same token words as the first time. The
+ * SyncTest hashes those words; without this every re-simulated load looked
+ * like a desync. Entries leave with the slot (invalidate / reset). */
+static std::unordered_map<uintptr_t, uint32_t> sPointerToToken;
 
 static void ensureCapacity(void)
 {
@@ -142,6 +151,17 @@ uint32_t portRelocRegisterPointer(void *ptr)
     }
     ensureCapacity();
 
+    {
+        auto it = sPointerToToken.find(reinterpret_cast<uintptr_t>(ptr));
+        if (it != sPointerToToken.end()) {
+            uint32_t existing = 0;
+            if (decodeToken(it->second, &existing) && sSlots[existing].ptr == ptr) {
+                return it->second;
+            }
+            sPointerToToken.erase(it);
+        }
+    }
+
     uint32_t index;
     uint32_t gen;
     if (!sFreeIndices.empty()) {
@@ -161,7 +181,9 @@ uint32_t portRelocRegisterPointer(void *ptr)
         sSlots[index].gen = gen;
     }
     sSlots[index].ptr = ptr;
-    return makeToken(index, gen);
+    uint32_t token = makeToken(index, gen);
+    sPointerToToken[reinterpret_cast<uintptr_t>(ptr)] = token;
+    return token;
 }
 
 void *portRelocResolvePointer(uint32_t token)
@@ -230,6 +252,7 @@ void portRelocInvalidateRange(const void *base, size_t size)
         if (sSlots[i].gen == 0) continue;       /* already free */
         uintptr_t p = reinterpret_cast<uintptr_t>(sSlots[i].ptr);
         if (p >= lo && p < hi) {
+            sPointerToToken.erase(p);
             sSlots[i].ptr = nullptr;
             sSlots[i].gen = bumpSlotGeneration(sSlots[i].gen);
             sFreeIndices.push_back(i);
@@ -259,6 +282,7 @@ void portRelocResetPointerTable(void)
     }
     sNextIndex = 1;
     sFreeIndices.clear();
+    sPointerToToken.clear();
 }
 
 /*
