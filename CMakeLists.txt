@@ -541,7 +541,11 @@ list(APPEND SSB64_SRC_PORT
 # SSB64_BUILD_COROUTINE_TEST=ON below. Never link it into the game.
 list(FILTER SSB64_SRC_PORT EXCLUDE REGEX "port/coroutine_test\\.cpp$")
 if (SSB64_COROUTINE_MASM)
-    list(APPEND SSB64_SRC_PORT ${CMAKE_CURRENT_SOURCE_DIR}/port/coroutine_win64.asm)
+    # Own static library rather than a source of the executable: with the
+    # Visual Studio generator a MASM object does not land where
+    # WINDOWS_EXPORT_ALL_SYMBOLS' .def generation (objects.txt) expects it,
+    # and the link fails with "Couldn't open file ... coroutine_win64.asm.obj".
+    add_library(ssb64_coroutine_masm STATIC ${CMAKE_CURRENT_SOURCE_DIR}/port/coroutine_win64.asm)
 endif()
 # port/mods/ (HookManager + SymbolResolver) wraps funchook, which isn't
 # fetched when the mod system is disabled. Drop it so nothing references the
@@ -1022,9 +1026,15 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Android")
 elseif(BATTLESHIP_UWP)
     add_dependencies(${PROJECT_NAME} libultraship TorchExternal)
     target_link_libraries(${PROJECT_NAME} PRIVATE libultraship SDL2 LIBUWP GLFW3)
+    if (SSB64_COROUTINE_MASM)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ssb64_coroutine_masm)
+    endif()
 else()
     add_dependencies(${PROJECT_NAME} libultraship TorchExternal discord-rpc)
     target_link_libraries(${PROJECT_NAME} PRIVATE libultraship discord-rpc)
+    if (SSB64_COROUTINE_MASM)
+        target_link_libraries(${PROJECT_NAME} PRIVATE ssb64_coroutine_masm)
+    endif()
 endif()
 
 # macOS: the port calls CFPreferences* directly (ApplePressAndHoldEnabled fix

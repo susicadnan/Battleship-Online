@@ -88,10 +88,10 @@ Build rollback netcode in phases:
 - Duplicate log lines expose transport health: `gap`/`dup`/`ooo` flag sequence regressions independently of staged frame counters because redundant frame bundles hide single packet loss.
 - One-way packet diagnosis is still manual. Keep logging role, local/remote players, tick, staged frames, highest remote tick, dropped packets, late frames, and barrier state when changing netpeer.
 - Narrow gameplay/state hashes exist (`src/sys/netsync.c`), but snapshot/rollback coverage is intentionally shallow until input parity is nailed down.
-- Snapshot/restore exists but is **unverified at runtime** (written without a ROM build). First thing to do: build, run `SSB64_ROLLBACK_SYNCTEST=4`, and move any TU/variable the mismatch columns point at into or out of the state section. Do not widen the hash to hide a mismatch.
+- Snapshot/restore passes `SSB64_ROLLBACK_SYNCTEST=4` on Linux for a 6000-frame idle VS match (two local instances via the bootstrap). Re-run it after touching anything that caches state about arena bytes outside the snapshot (see `port/netstate_host.cpp`); if a column mismatches, move the TU/variable it points at into or out of the state section. Do not widen the hash to hide a mismatch.
 - `netpeer.c` still tags outgoing frames with `tick + sSYNetPeerInputDelay`; under rollback that is only consistent at delay 0. Input delay must become a local queue in netinput (both peers apply the same input on the same tick).
 - Nothing suppresses SFX/rumble during resimulation yet; expect doubled sounds after a rollback until Phase 2.
-- Windows cannot snapshot Win32 fibers; rollback refuses to start there until an x86-64 asm context switch replaces them.
+- Windows x64 MSVC builds use `port/coroutine_win64.asm` instead of fibers so coroutine stacks can be snapshotted; `netpeer.c` is still `!_WIN32` (no WinSock), so netplay itself does not run on Windows yet.
 - No STUN/TURN, NAT traversal, relay fallback, matchmaking, or final session owner model exists yet.
 
 ## Desync triage playbook

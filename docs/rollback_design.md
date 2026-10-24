@@ -84,8 +84,10 @@ frame can resurrect a process that has since finished), and
 can reference them. `port_gobj_coroutine_restore_set()` destroys coroutines
 created after the snapshot being restored.
 
-Win32 fibers cannot be copied; rollback refuses to start on that backend.
-Windows needs an x86-64 context switch like `coroutine_aarch64.S` (Phase 3).
+Win32 fibers cannot be copied, so x64 MSVC builds use `coroutine_win64.asm` +
+`coroutine_win64.cpp` (hand-rolled context switch, own VirtualAlloc'd stacks,
+TIB stack bounds swapped like fibers do). The fiber backend remains for other
+Windows targets, where rollback refuses to start.
 
 ## The driver
 
@@ -151,17 +153,19 @@ any desktop. Dirty-page tracking is a later optimisation if Android needs it.
 
 ## Phases
 
-1. **Done (this change):** state section, snapshot/restore, coroutine
-   snapshots, resimulation driver, netinput resim mode, SyncTest.
-   *Not yet verified at runtime — needs a ROM build; run the SyncTest.*
+1. **Done:** state section, snapshot/restore, coroutine snapshots,
+   resimulation driver, netinput resim mode, SyncTest, host-side bookkeeping
+   journal. Verified on Linux (clang): two local instances over the debug P2P
+   bootstrap, `SSB64_ROLLBACK_SYNCTEST=4`, 6000 frames, no mismatch.
 2. **Transport correctness:** send local inputs tagged with their *own* tick
    (today `netpeer.c` adds `sSYNetPeerInputDelay`, which only works at delay
    0 under rollback); implement input delay as a local queue in netinput so
    both peers apply the same input on the same tick; stall when the remote is
    more than `slots` ticks behind; ack/redundancy already exist. Suppress SFX,
    rumble and Discord presence while `syNetStateCheckResimulating()`.
-3. **Windows:** x86-64 asm context switch replacing Win32 fibers so coroutine
-   stacks can be snapshotted; WinSock in `netpeer.c` (currently `!_WIN32`).
+3. **Windows:** context switch done (`coroutine_win64.asm`); still needed:
+   WinSock in `netpeer.c` (currently `!_WIN32`) and a runtime SyncTest pass
+   on an MSVC build.
 4. **Connectivity ("connect to anyone"):** STUN for reflexive address, UDP
    hole punching, a tiny signaling/matchmaking service exchanging connect
    codes (Slippi-style `ADO#123`), relay fallback for symmetric NATs; lobby
