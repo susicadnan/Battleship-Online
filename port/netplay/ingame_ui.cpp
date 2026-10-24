@@ -46,13 +46,16 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 		ImGuiViewport *vp = ImGui::GetMainViewport();
 		ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y - 16.0f),
 		                        ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+		/* While the panel is up we are reachable by our code. */
+		port_lobby_listen();
 		ImGui::SetNextWindowBgAlpha(0.80f);
 		Ship::GuiWindow::Draw();
 	}
 
   protected:
 	void InitElement() override {
-		std::strncpy(mDirect, CVarGetString("gNetplay.Direct", "192.168.1.2:7000"), sizeof(mDirect) - 1);
+		std::strncpy(mName, CVarGetString("gNetplay.Name", "PLAYER"), sizeof(mName) - 1);
+		std::strncpy(mFriend, CVarGetString("gNetplay.LastFriend", ""), sizeof(mFriend) - 1);
 	}
 	void UpdateElement() override {}
 
@@ -60,12 +63,19 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 		int state = port_lobby_state();
 		bool busy = state == PORT_LOBBY_PUNCHING || state == PORT_LOBBY_BOOTSTRAP || state == PORT_LOBBY_IN_MATCH ||
 		            state == PORT_LOBBY_POST_MATCH || state == PORT_LOBBY_REGISTERING ||
-		            state == PORT_LOBBY_REGISTERED || state == PORT_LOBBY_WAITING;
+		            state == PORT_LOBBY_REGISTERED || state == PORT_LOBBY_WAITING || state == PORT_LOBBY_SEEKING ||
+		            state == PORT_LOBBY_HOSTING;
 
 		ImGui::SetWindowFontScale(1.15f);
 		ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "ONLINE PLAY");
 		ImGui::SameLine();
-		ImGui::TextDisabled("  you are %s, UDP port %d", port_lobby_code(), CVarGetInteger("gNetplay.Port", 7000));
+		ImGui::TextDisabled("  your code");
+		ImGui::SameLine();
+		ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "%s", port_lobby_code());
+		ImGui::SameLine();
+		if (ImGui::SmallButton("Copy")) ImGui::SetClipboardText(port_lobby_code());
+
+		DrawRequests();
 
 		if (state == PORT_LOBBY_HOSTING) {
 			ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.6f, 1.0f), "%s", port_lobby_status());
@@ -91,36 +101,42 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 			return;
 		}
 
-		bool server_set = CVarGetString("gNetplay.Server", "")[0] != '\0';
-		if (server_set) {
-			ImGui::SetNextItemWidth(170.0f);
-			ImGui::InputText("Friend's code", mFriend, sizeof(mFriend),
-			                 ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank);
+		if (!busy) {
+			ImGui::SetNextItemWidth(130.0f);
+			if (ImGui::InputText("Your name", mName, sizeof(mName),
+			                     ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank)) {
+				port_lobby_set_name(mName);
+			}
 			ImGui::SameLine();
-			ImGui::BeginDisabled(busy);
-			if (ImGui::Button("Connect")) port_lobby_connect(mFriend);
-			ImGui::EndDisabled();
+			ImGui::TextDisabled("(shown over your fighter)");
 		}
 
+		ImGui::SetNextItemWidth(170.0f);
 		ImGui::BeginDisabled(busy);
-		if (ImGui::Button("Host")) port_lobby_connect_direct("", 1);
+		bool enter = ImGui::InputText("Friend's code", mFriend, sizeof(mFriend),
+		                              ImGuiInputTextFlags_CharsUppercase | ImGuiInputTextFlags_CharsNoBlank |
+		                                  ImGuiInputTextFlags_EnterReturnsTrue);
+		ImGui::SameLine();
+		if (ImGui::Button("Play") || enter) {
+			CVarSetString("gNetplay.LastFriend", mFriend);
+			CVarSave();
+			port_lobby_play_code(mFriend);
+		}
 		ImGui::EndDisabled();
 		if (ImGui::IsItemHovered() && !busy) {
-			ImGui::SetTooltip("Open a session on your UDP port for up to three friends,\n"
-			                  "then press Start. Your port must be reachable (same LAN, or a port forward).");
+			ImGui::SetTooltip("Your friend enters your code too, or presses Accept when your request shows up.\n"
+			                  "No addresses or port forwarding needed.");
 		}
 		ImGui::SameLine();
 		ImGui::TextDisabled("or");
 		ImGui::SameLine();
-		ImGui::SetNextItemWidth(170.0f);
-		if (ImGui::InputText("Host's IP:port", mDirect, sizeof(mDirect), ImGuiInputTextFlags_CharsNoBlank)) {
-			CVarSetString("gNetplay.Direct", mDirect);
-			CVarSave();
-		}
-		ImGui::SameLine();
 		ImGui::BeginDisabled(busy);
-		if (ImGui::Button("Join")) port_lobby_connect_direct(mDirect, 0);
+		if (ImGui::Button("Open a lobby")) port_lobby_connect_direct("", 1);
 		ImGui::EndDisabled();
+		if (ImGui::IsItemHovered() && !busy) {
+			ImGui::SetTooltip("Up to four people: friends send requests with your code,\n"
+			                  "you accept each one, then press Start.");
+		}
 		if (busy) {
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel")) port_lobby_cancel();
@@ -143,6 +159,19 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 	}
 
   private:
+	/* "BOB#2222 wants to play  [Accept] [No]" for everyone who asked. */
+	void DrawRequests() {
+		for (int i = 0; i < port_lobby_request_count(); i++) {
+			ImGui::PushID(i);
+			ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "%s wants to play", port_lobby_request_code(i));
+			ImGui::SameLine();
+			if (ImGui::Button("Accept")) port_lobby_request_answer(i, 1);
+			ImGui::SameLine();
+			if (ImGui::Button("No")) port_lobby_request_answer(i, 0);
+			ImGui::PopID();
+		}
+	}
+
 	/* Who plays which port and who is watching (sys/netpeer.c's round).
 	 * draw = false only asks whether there is a roster yet. */
 	bool DrawRoster(bool draw) {
@@ -185,7 +214,7 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 		}
 	}
 
-	char mDirect[32] = {};
+	char mName[16] = {};
 	char mFriend[24] = {};
 };
 

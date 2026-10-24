@@ -154,7 +154,4 @@ void PortNetplayDrawPanel()
 		ImGui::SameLine();
 		if (ImGui::Button("Leave")) port_lobby_cancel();
 	}
-	if (port_lobby_public_addr()[0] != '\0') {
-		ImGui::TextDisabled("Public endpoint: %s", port_lobby_public_addr());
-	}
 }

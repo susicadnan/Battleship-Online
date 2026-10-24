@@ -4,7 +4,58 @@ How two players anywhere on the internet end up in the same VS battle with
 rollback. Companion to `docs/rollback_design.md` (the simulation side) and
 `docs/netplay_architecture.md` (input layer, debug transport).
 
-## Pieces
+## Connect by code, nothing to host (default)
+
+The in-game Online panel needs no server of ours and never shows anyone an
+address. `port/netplay/signal.cpp` stands in for the rendezvous server
+with free public infrastructure:
+
+- **STUN** (`stun.l.google.com:19302`, `stun.cloudflare.com:3478`,
+  `stun1.l.google.com:19302`; `gNetplay.Stun`): a Binding Request from the
+  game's own UDP socket returns the public ip:port the router mapped it to.
+- **Public MQTT brokers** (`broker.emqx.io`, `broker.hivemq.com`,
+  `test.mosquitto.org`, all port 1883; `gNetplay.Brokers`) as a mailbox per
+  code. Each game subscribes to the topic `battleship-smash/v1/<hash of its
+  code>`; messages to a code are encrypted with a key derived from that code
+  (SHA-256 keystream plus an 8-byte tag), so a broker or anyone watching it
+  sees neither codes nor addresses without already knowing the code. Every
+  message goes to every broker that is up; copies are dropped by nonce.
+
+Flow (`lobby.cpp`, messages `BSS1 <verb> <sender code> ...`):
+
+1. While the Online panel is up, the game listens on its own code
+   (`port_lobby_listen`), with its UDP socket open and STUN answered.
+2. A types B's code and presses Play (`port_lobby_play_code`, state
+   `SEEKING`): every second A sends `REQ A <endpoints>`, where the endpoints
+   are A's public address from STUN, its LAN address and loopback.
+3. B sees "A wants to play" with Accept / No. If B has typed A's code too,
+   that counts as both saying yes and the smaller code hosts without a
+   click. Typing the code of someone who already asked is the same as
+   Accept.
+4. Whoever accepts hosts: B opens a lobby (`HOSTING`, or keeps the one it
+   has, or takes A in at the next character select if a session is already
+   running), answers `OK B <endpoints>` and punches towards all of A's
+   endpoints. A punches towards all of B's, keeps the first that answers
+   (only a `PUNCH` carrying B's code counts) and from there it is the
+   direct-join path below: the group session of `docs/netplay_groups.md`.
+   Accepting from the menus starts the session as soon as A is in; in a
+   lobby opened with "Open a lobby" the host still presses Start.
+5. `NO` / `FULL` end A's request with a message.
+
+Nothing here carries game traffic. Two players behind symmetric NATs
+(some mobile and carrier-grade NAT connections) cannot punch through and
+see "One of your routers blocks direct connections"; for them the
+rendezvous server's relay below is still the answer. Headless:
+`SSB64_LOBBY_LISTEN=1 SSB64_LOBBY_AUTOACCEPT=1` on one side,
+`SSB64_LOBBY_PLAY=<code>` on the other, with `SSB64_NETPLAY_BROKERS` /
+`SSB64_NETPLAY_STUN` pointing at a local `mosquitto` and STUN responder.
+
+Names: in a session the game draws each player's name (the part before the
+`#`) instead of 1P..4P over the fighters, on the character select cursor
+and on the results screen (`decomp/src/if/ifcommon.c`,
+`syNetPeerGetSlotName`).
+
+## Pieces (rendezvous server path)
 
 | Piece | Where | Runs |
 |---|---|---|

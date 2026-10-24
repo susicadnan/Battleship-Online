@@ -1,5 +1,12 @@
 # Hosting the rendezvous server
 
+**Optional.** Connecting by code from the in-game Online panel needs no
+server: it uses public STUN servers and public MQTT brokers (see
+`docs/netplay_connect_codes.md`). The server below only adds a relay for
+the few connections that cannot punch through (symmetric NAT on both
+sides). Free options if that is ever needed: an Oracle Cloud "Always Free"
+VM or a Google Cloud e2-micro free-tier VM both run it at no cost.
+
 The rendezvous server (`tools/netplay/rendezvous_server.py`) is the only
 piece of online play that needs a machine with a public address. It matches
 connect codes, tells each player the other's endpoint, and relays a match

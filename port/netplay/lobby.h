@@ -31,6 +31,7 @@ typedef enum PortLobbyState
 	PORT_LOBBY_POST_MATCH,    /* game over, connection kept; Rematch or Leave */
 	PORT_LOBBY_FAILED,
 	PORT_LOBBY_HOSTING,       /* direct host: taking guests (up to 3) until Start */
+	PORT_LOBBY_SEEKING,       /* we entered a friend's code; asking them until they accept */
 } PortLobbyState;
 
 /* Once per frame, from the game loop. Cheap when idle. */
@@ -49,6 +50,20 @@ void port_lobby_connect(const char *friend_code);
  * joining later gets in at the next character select. */
 void port_lobby_connect_direct(const char *host_port, int is_host);
 void port_lobby_host_start(void);
+
+/* Connect by code, nothing to host and no addresses anyone sees (signal.h).
+ * The Online panel calls port_lobby_listen() every frame it is up, which
+ * makes us reachable by our code. port_lobby_play_code() asks a friend; they
+ * see the request and Accept (or have typed our code too, which counts as
+ * both saying yes). Whoever accepts hosts; the endpoints are swapped and the
+ * NATs punched behind the scenes, then it is the usual lobby session. */
+void port_lobby_listen(void);
+void port_lobby_play_code(const char *friend_code);
+int port_lobby_request_count(void);              /* people asking to play with us */
+const char *port_lobby_request_code(int index);
+void port_lobby_request_answer(int index, int accept);
+const char *port_lobby_friend_code(void);        /* SEEKING/PUNCHING: who we asked */
+int port_lobby_online_service_up(void);
 int port_lobby_host_guest_count(void);              /* HOSTING: guests in so far */
 const char *port_lobby_host_guest_code(int index);  /* HOSTING: their codes */
 void port_lobby_cancel(void);
