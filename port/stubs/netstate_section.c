@@ -32,11 +32,14 @@ int syNetStateSectionGetRanges(void **starts, size_t *sizes, int max_ranges)
 	return n;
 }
 
-#elif defined(__clang__)
+#elif defined(__clang__) || defined(__GNUC__)
 
-/* ELF: the linker synthesises __start_/__stop_ for C-identifier section names
- * when something references them. Weak so a build that ends up with an empty
- * section still links. */
+/* ELF, clang and GCC alike: the output sections are ssb64_state_data and
+ * ssb64_state_bss (clang: #pragma clang section in netstate_section.h; GCC:
+ * -fdata-sections gathered by port/netstate_section.ld), and the linker
+ * synthesises __start_/__stop_ for C-identifier section names when something
+ * references them. Weak so a build that ends up with an empty section still
+ * links. */
 extern char __start_ssb64_state_data[] __attribute__((weak));
 extern char __stop_ssb64_state_data[] __attribute__((weak));
 extern char __start_ssb64_state_bss[] __attribute__((weak));
@@ -77,23 +80,6 @@ int syNetStateSectionGetRanges(void **starts, size_t *sizes, int max_ranges)
 	}
 	starts[0] = sSYNetStateSectionStart + sizeof(sSYNetStateSectionStart);
 	sizes[0] = (size_t)((char *)sSYNetStateSectionEnd - (char *)starts[0]);
-	return 1;
-}
-
-#elif defined(__GNUC__)
-
-/* GCC/ELF: symbols defined by port/netstate_section.ld. */
-extern char __ssb64_state_start[] __attribute__((weak));
-extern char __ssb64_state_end[] __attribute__((weak));
-
-int syNetStateSectionGetRanges(void **starts, size_t *sizes, int max_ranges)
-{
-	if ((max_ranges < 1) || (__ssb64_state_start == NULL))
-	{
-		return 0;
-	}
-	starts[0] = __ssb64_state_start;
-	sizes[0] = (size_t)(__ssb64_state_end - __ssb64_state_start);
 	return 1;
 }
 
