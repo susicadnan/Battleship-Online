@@ -3,6 +3,7 @@
  */
 #include "lobby_ui.h"
 #include "lobby.h"
+#include "netsock.h"
 
 #include <libultraship/bridge/consolevariablebridge.h>
 #include <imgui.h>
@@ -159,6 +160,20 @@ void PortNetplayDrawPanel()
 		ImGui::SameLine();
 		if (ImGui::Button("Join")) port_lobby_connect_direct(sDirect, 0);
 		ImGui::EndDisabled();
+
+		/* Testing aid: delays and drops what this machine receives
+		 * (port_netsock_set_sim), so lag handling can be tried on a LAN.
+		 * Deliberately not saved: it is off again after a restart. */
+		ImGui::SeparatorText("Simulate a bad connection (testing only, resets on restart)");
+		static int sim_delay = 0, sim_jitter = 0, sim_loss = 0;
+		bool sim_changed = false;
+		sim_changed |= ImGui::SliderInt("Extra lag on received packets (ms)", &sim_delay, 0, 250);
+		sim_changed |= ImGui::SliderInt("Jitter (ms)", &sim_jitter, 0, 60);
+		sim_changed |= ImGui::SliderInt("Packet loss (%)", &sim_loss, 0, 20);
+		if (sim_changed) port_netsock_set_sim(sim_delay, sim_jitter, sim_loss);
+		if (sim_delay || sim_jitter || sim_loss) {
+			ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "Simulated lag is ON until you set these to 0 or restart.");
+		}
 	}
 
 	ImGui::SeparatorText("Status");

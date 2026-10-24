@@ -35,6 +35,126 @@ extern void port_log(const char *fmt, ...);
  * path, and they leave these out. */
 extern long strtol(const char *s, char **end, int base);
 extern int strcmp(const char *a, const char *b);
+extern char *getenv(const char *name);
+extern void *calloc(size_t n, size_t size);
+
+/* ---- bad-connection simulator (port_netsock_set_sim) ---------------------
+ * Receive side only: port_netsock_recvfrom drains the real socket into a
+ * holding queue, stamping each packet with the time it may be handed out
+ * (or dropping it), then hands out the packet that is due soonest. Its own
+ * RNG, never the game's. */
+
+#define PORT_NETSIM_MAX_SOCKETS 4
+#define PORT_NETSIM_QUEUE 512
+#define PORT_NETSIM_PACKET 1536
+
+typedef struct PortNetSimPacket
+{
+	uint32_t due_ms;
+	int len;
+	PortNetAddr from;
+	unsigned char data[PORT_NETSIM_PACKET];
+
+} PortNetSimPacket;
+
+typedef struct PortNetSimQueue
+{
+	intptr_t sock;
+	int count;
+	PortNetSimPacket packets[PORT_NETSIM_QUEUE];
+
+} PortNetSimQueue;
+
+static int sPortNetSimDelay, sPortNetSimJitter, sPortNetSimLoss, sPortNetSimEnvRead;
+/* Env-only: drop everything for OUTAGE_MS out of every OUTAGE_EVERY ms. */
+static int sPortNetSimOutageEvery, sPortNetSimOutageMs;
+static uint32_t sPortNetSimRng = 0x9E3779B9u;
+static PortNetSimQueue *sPortNetSimQueues[PORT_NETSIM_MAX_SOCKETS];
+
+static uint32_t port_netsim_rand(void)
+{
+	sPortNetSimRng ^= sPortNetSimRng << 13;
+	sPortNetSimRng ^= sPortNetSimRng >> 17;
+	sPortNetSimRng ^= sPortNetSimRng << 5;
+	return sPortNetSimRng;
+}
+
+static void port_netsim_read_env(void)
+{
+	const char *v;
+
+	if (sPortNetSimEnvRead) {
+		return;
+	}
+	sPortNetSimEnvRead = 1;
+	if ((v = getenv("SSB64_NETSIM_DELAY")) != NULL) sPortNetSimDelay = (int)strtol(v, NULL, 10);
+	if ((v = getenv("SSB64_NETSIM_JITTER")) != NULL) sPortNetSimJitter = (int)strtol(v, NULL, 10);
+	if ((v = getenv("SSB64_NETSIM_LOSS")) != NULL) sPortNetSimLoss = (int)strtol(v, NULL, 10);
+	if ((v = getenv("SSB64_NETSIM_OUTAGE_EVERY")) != NULL) sPortNetSimOutageEvery = (int)strtol(v, NULL, 10);
+	if ((v = getenv("SSB64_NETSIM_OUTAGE_MS")) != NULL) sPortNetSimOutageMs = (int)strtol(v, NULL, 10);
+	if ((v = getenv("SSB64_NETSIM_SEED")) != NULL) sPortNetSimRng = (uint32_t)strtol(v, NULL, 10) | 1u;
+	if (sPortNetSimDelay || sPortNetSimJitter || sPortNetSimLoss || sPortNetSimOutageMs) {
+		port_log("SSB64 NetSim: +%d ms, jitter %d ms, loss %d%%, outage %d ms every %d ms on received packets\n",
+		         sPortNetSimDelay, sPortNetSimJitter, sPortNetSimLoss, sPortNetSimOutageMs, sPortNetSimOutageEvery);
+	}
+}
+
+void port_netsock_set_sim(int delay_ms, int jitter_ms, int loss_pct)
+{
+	port_netsim_read_env();
+	/* The environment wins so headless tests are not overridden by a saved setting. */
+	if (getenv("SSB64_NETSIM_DELAY") || getenv("SSB64_NETSIM_JITTER") || getenv("SSB64_NETSIM_LOSS")) {
+		return;
+	}
+	if ((delay_ms != sPortNetSimDelay) || (jitter_ms != sPortNetSimJitter) || (loss_pct != sPortNetSimLoss)) {
+		port_log("SSB64 NetSim: +%d ms, jitter %d ms, loss %d%% on received packets\n", delay_ms, jitter_ms, loss_pct);
+	}
+	sPortNetSimDelay = (delay_ms < 0) ? 0 : delay_ms;
+	sPortNetSimJitter = (jitter_ms < 0) ? 0 : jitter_ms;
+	sPortNetSimLoss = (loss_pct < 0) ? 0 : ((loss_pct > 100) ? 100 : loss_pct);
+}
+
+static int port_netsim_active(void)
+{
+	port_netsim_read_env();
+	return (sPortNetSimDelay > 0) || (sPortNetSimJitter > 0) || (sPortNetSimLoss > 0) || (sPortNetSimOutageMs > 0);
+}
+
+static PortNetSimQueue *port_netsim_queue(intptr_t sock, int create)
+{
+	int i;
+
+	for (i = 0; i < PORT_NETSIM_MAX_SOCKETS; i++) {
+		if ((sPortNetSimQueues[i] != NULL) && (sPortNetSimQueues[i]->sock == sock)) {
+			return sPortNetSimQueues[i];
+		}
+	}
+	if (!create) {
+		return NULL;
+	}
+	for (i = 0; i < PORT_NETSIM_MAX_SOCKETS; i++) {
+		if (sPortNetSimQueues[i] == NULL) {
+			sPortNetSimQueues[i] = (PortNetSimQueue *)calloc(1, sizeof(PortNetSimQueue));
+			if (sPortNetSimQueues[i] != NULL) {
+				sPortNetSimQueues[i]->sock = -1;
+			}
+		}
+		if ((sPortNetSimQueues[i] != NULL) && (sPortNetSimQueues[i]->sock == -1)) {
+			sPortNetSimQueues[i]->sock = sock;
+			return sPortNetSimQueues[i];
+		}
+	}
+	return NULL;
+}
+
+static void port_netsim_forget(intptr_t sock)
+{
+	PortNetSimQueue *q = port_netsim_queue(sock, 0);
+	if (q != NULL) {
+		q->count = 0;
+		q->sock = -1;
+	}
+}
 
 static char *port_netsock_put_u32(char *p, char *end, uint32_t v)
 {
@@ -208,6 +328,7 @@ void port_netsock_close(intptr_t sock)
 	if (sock < 0) {
 		return;
 	}
+	port_netsim_forget(sock);
 #ifdef _WIN32
 	closesocket((SOCKET)sock);
 #else
@@ -228,7 +349,7 @@ int port_netsock_sendto(intptr_t sock, const void *buf, int len, const PortNetAd
 	return (sent < 0) ? -1 : sent;
 }
 
-int port_netsock_recvfrom(intptr_t sock, void *buf, int cap, PortNetAddr *from)
+static int port_netsock_recvfrom_raw(intptr_t sock, void *buf, int cap, PortNetAddr *from)
 {
 	struct sockaddr_in sa;
 #ifdef _WIN32
@@ -249,6 +370,74 @@ int port_netsock_recvfrom(intptr_t sock, void *buf, int cap, PortNetAddr *from)
 		port_netsock_from_sockaddr(&sa, from);
 	}
 	return got;
+}
+
+int port_netsock_recvfrom(intptr_t sock, void *buf, int cap, PortNetAddr *from)
+{
+	PortNetSimQueue *q;
+	uint32_t now;
+	int best, i, len;
+
+	q = port_netsim_queue(sock, 0);
+	if (!port_netsim_active()) {
+		/* Turned off mid-session: hand out what is still held first. */
+		if ((q == NULL) || (q->count == 0)) {
+			return port_netsock_recvfrom_raw(sock, buf, cap, from);
+		}
+	} else if (q == NULL) {
+		q = port_netsim_queue(sock, 1);
+		if (q == NULL) {
+			return port_netsock_recvfrom_raw(sock, buf, cap, from);
+		}
+	}
+	now = port_netsock_now_ms();
+	for (;;) {
+		PortNetSimPacket *p;
+		int got;
+
+		if (q->count >= PORT_NETSIM_QUEUE) {
+			break; /* a full router queue drops the rest; leave them in the kernel */
+		}
+		p = &q->packets[q->count];
+		got = port_netsock_recvfrom_raw(sock, p->data, PORT_NETSIM_PACKET, &p->from);
+		if (got <= 0) {
+			if ((got < 0) && (q->count == 0)) {
+				return -1;
+			}
+			break;
+		}
+		if ((sPortNetSimLoss > 0) && ((int)(port_netsim_rand() % 100u) < sPortNetSimLoss)) {
+			continue;
+		}
+		if ((sPortNetSimOutageEvery > 0) && ((int)(now % (uint32_t)sPortNetSimOutageEvery) < sPortNetSimOutageMs)) {
+			continue;
+		}
+		p->len = got;
+		p->due_ms = now + (uint32_t)sPortNetSimDelay +
+		            ((sPortNetSimJitter > 0) ? (port_netsim_rand() % (uint32_t)(sPortNetSimJitter + 1)) : 0u);
+		q->count++;
+	}
+	best = -1;
+	for (i = 0; i < q->count; i++) {
+		if ((int32_t)(now - q->packets[i].due_ms) >= 0) {
+			if ((best < 0) || ((int32_t)(q->packets[i].due_ms - q->packets[best].due_ms) < 0)) {
+				best = i;
+			}
+		}
+	}
+	if (best < 0) {
+		return 0;
+	}
+	len = (q->packets[best].len < cap) ? q->packets[best].len : cap;
+	memcpy(buf, q->packets[best].data, (size_t)len);
+	if (from != NULL) {
+		*from = q->packets[best].from;
+	}
+	q->count--;
+	if (best != q->count) {
+		q->packets[best] = q->packets[q->count];
+	}
+	return len;
 }
 
 void port_netsock_sleep_us(uint32_t usecs)
