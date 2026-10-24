@@ -59,6 +59,126 @@ extern int atoi(const char *nptr);
 static OSThread *sServiceThreads[PORT_MAX_SERVICE_THREADS];
 static s32 sServiceThreadCount = 0;
 
+/* ---- GObj coroutine registry (rollback) ----
+ * See port/netstate_coro.h. GObj thread processes (ID >= 100) are recorded
+ * here so sys/netstate.c can snapshot their stacks with the arena. While a
+ * rollback session is active, osDestroyThread parks them (alive = 0) instead
+ * of freeing, because a restored frame may still reference the coroutine.
+ */
+#include "netstate_coro.h"
+
+static PortGObjCoroutineRecord sGObjCoroutines[PORT_GOBJ_COROUTINE_MAX];
+static int sGObjCoroutineCount = 0;
+static int sGObjCoroutineRollbackActive = 0;
+static unsigned (*sGObjCoroutineTickFn)(void) = NULL;
+
+static int port_gobj_coroutine_find(PortCoroutine *co)
+{
+	for (int i = 0; i < sGObjCoroutineCount; i++) {
+		if (sGObjCoroutines[i].co == co) return i;
+	}
+	return -1;
+}
+
+static void port_gobj_coroutine_remove_at(int i)
+{
+	sGObjCoroutines[i] = sGObjCoroutines[--sGObjCoroutineCount];
+}
+
+static void port_gobj_coroutine_register(OSThread *t, PortCoroutine *co)
+{
+	if (sGObjCoroutineCount >= PORT_GOBJ_COROUTINE_MAX) {
+		port_log("SSB64 NetState: GObj coroutine registry full (%d) — rollback cannot track thread %d\n",
+		         PORT_GOBJ_COROUTINE_MAX, (int)t->id);
+		return;
+	}
+	PortGObjCoroutineRecord *rec = &sGObjCoroutines[sGObjCoroutineCount++];
+	rec->thread = t;
+	rec->co = co;
+	rec->alive = 1;
+	rec->death_tick = 0;
+}
+
+/* Returns 1 when the coroutine was parked (caller must not free it). */
+static int port_gobj_coroutine_on_destroy(PortCoroutine *co)
+{
+	int i = port_gobj_coroutine_find(co);
+	if (i < 0) {
+		return 0;
+	}
+	if (!sGObjCoroutineRollbackActive) {
+		port_gobj_coroutine_remove_at(i);
+		return 0;
+	}
+	sGObjCoroutines[i].alive = 0;
+	sGObjCoroutines[i].death_tick = sGObjCoroutineTickFn ? sGObjCoroutineTickFn() : 0;
+	return 1;
+}
+
+void port_gobj_coroutine_set_rollback_active(int active, unsigned (*tick_fn)(void))
+{
+	sGObjCoroutineRollbackActive = active;
+	sGObjCoroutineTickFn = tick_fn;
+	if (!active) {
+		for (int i = sGObjCoroutineCount - 1; i >= 0; i--) {
+			if (!sGObjCoroutines[i].alive) {
+				port_coroutine_destroy(sGObjCoroutines[i].co);
+				port_gobj_coroutine_remove_at(i);
+			}
+		}
+	}
+}
+
+int port_gobj_coroutine_count(void)
+{
+	return sGObjCoroutineCount;
+}
+
+const PortGObjCoroutineRecord *port_gobj_coroutine_get(int index)
+{
+	if (index < 0 || index >= sGObjCoroutineCount) return NULL;
+	return &sGObjCoroutines[index];
+}
+
+void port_gobj_coroutine_collect(unsigned oldest_tick)
+{
+	for (int i = sGObjCoroutineCount - 1; i >= 0; i--) {
+		if (!sGObjCoroutines[i].alive && sGObjCoroutines[i].death_tick < oldest_tick) {
+			port_coroutine_destroy(sGObjCoroutines[i].co);
+			port_gobj_coroutine_remove_at(i);
+		}
+	}
+}
+
+void port_gobj_coroutine_restore_set(const PortGObjCoroutineRecord *saved, int count)
+{
+	/* Anything not in the saved set was created after the snapshot: the
+	 * arena no longer references it, so free it. */
+	for (int i = sGObjCoroutineCount - 1; i >= 0; i--) {
+		int found = 0;
+		for (int j = 0; j < count; j++) {
+			if (saved[j].co == sGObjCoroutines[i].co) { found = 1; break; }
+		}
+		if (!found) {
+			port_coroutine_destroy(sGObjCoroutines[i].co);
+			port_gobj_coroutine_remove_at(i);
+		}
+	}
+	/* Saved entries get their liveness back; a parked coroutine that was
+	 * alive at the snapshot is resurrected. A saved entry missing from the
+	 * registry was collected too early — that is a netstate bug, say so. */
+	for (int j = 0; j < count; j++) {
+		int i = port_gobj_coroutine_find(saved[j].co);
+		if (i < 0) {
+			port_log("SSB64 NetState: saved GObj coroutine %p is gone — collection window too short\n",
+			         (void *)saved[j].co);
+			continue;
+		}
+		sGObjCoroutines[i].alive = saved[j].alive;
+		sGObjCoroutines[i].death_tick = saved[j].death_tick;
+	}
+}
+
 static void port_register_service_thread(OSThread *t)
 {
 	if (t->id >= 100) return;  /* Skip GObj threads */
@@ -198,6 +318,9 @@ void osStartThread(OSThread *t)
 			port_log( "SSB64: failed to create coroutine for thread %d\n", (int)t->id);
 			return;
 		}
+		if (t->id >= 100) {
+			port_gobj_coroutine_register(t, (PortCoroutine *)t->port_coroutine);
+		}
 	}
 
 	/* Resume the coroutine.  It will run until it yields (at an
@@ -229,7 +352,9 @@ void osDestroyThread(OSThread *t)
 		return;
 	}
 	if (t->port_coroutine != NULL) {
-		port_coroutine_destroy((PortCoroutine *)t->port_coroutine);
+		if (!port_gobj_coroutine_on_destroy((PortCoroutine *)t->port_coroutine)) {
+			port_coroutine_destroy((PortCoroutine *)t->port_coroutine);
+		}
 		t->port_coroutine = NULL;
 	}
 	t->port_entry = NULL;

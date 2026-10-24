@@ -14,6 +14,7 @@ This keeps the first netplay boundary at the controller layer:
 - debug replay file I/O lives in `src/sys/netreplay.c`
 - debug UDP P2P transport and match bootstrap live in `src/sys/netpeer.c`
 - narrow gameplay-state hashing for diagnostics lives in `src/sys/netsync.c`
+- simulation snapshot/restore and the rollback driver live in `src/sys/netstate.c` (`docs/rollback_design.md`)
 
 ## Current Integration
 
@@ -30,6 +31,8 @@ VS scene start
   -> netinput tick starts at 0
 
 taskman game tick during VS
+  -> syNetStateRunTick() (sys/netstate.c): save snapshot, roll back and
+     resimulate if a prediction was contradicted, SyncTest if enabled, then
   -> scene controller callback
   -> syNetInputFuncRead()
   -> syControllerFuncRead()

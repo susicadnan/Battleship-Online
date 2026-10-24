@@ -221,4 +221,64 @@ int port_coroutine_in_coroutine(void)
 	return sCurrentCoroutine != NULL;
 }
 
+/* ---- Rollback snapshot (see coroutine.h) ---------------------------------
+ * Blob layout: [ctx][finished][usable stack bytes]. The stack is copied whole
+ * (PORT_STACK_GOBJ is 64 KB) rather than from the saved SP upward, so the
+ * backend never has to interpret mcontext layouts. glibc's ucontext_t holds a
+ * self-pointer (uc_mcontext.fpregs -> __fpregs_mem); copying the struct back
+ * to the same address keeps it valid. */
+typedef struct PortCoroutineBlobHeader {
+	ucontext_t ctx;
+	int finished;
+} PortCoroutineBlobHeader;
+
+static size_t port_coroutine_usable_stack(PortCoroutine *co)
+{
+	size_t ps = port_page_size();
+	return (co->stack_total > ps) ? (co->stack_total - ps) : 0;
+}
+
+int port_coroutine_snapshot_supported(void)
+{
+	return 1;
+}
+
+size_t port_coroutine_snapshot_size(PortCoroutine *co)
+{
+	if (co == NULL || co->stack_mem == NULL) {
+		return 0;
+	}
+	return sizeof(PortCoroutineBlobHeader) + port_coroutine_usable_stack(co);
+}
+
+void port_coroutine_snapshot(PortCoroutine *co, void *out_blob)
+{
+	PortCoroutineBlobHeader *hdr = (PortCoroutineBlobHeader *)out_blob;
+	if (co == NULL || out_blob == NULL || co->stack_mem == NULL) {
+		return;
+	}
+	if (co == sCurrentCoroutine) {
+		fprintf(stderr, "SSB64: port_coroutine_snapshot on current coroutine\n");
+		abort();
+	}
+	memcpy(&hdr->ctx, &co->ctx, sizeof(hdr->ctx));
+	hdr->finished = co->finished;
+	memcpy(hdr + 1, co->stack_mem + port_page_size(), port_coroutine_usable_stack(co));
+}
+
+void port_coroutine_restore(PortCoroutine *co, const void *blob)
+{
+	const PortCoroutineBlobHeader *hdr = (const PortCoroutineBlobHeader *)blob;
+	if (co == NULL || blob == NULL || co->stack_mem == NULL) {
+		return;
+	}
+	if (co == sCurrentCoroutine) {
+		fprintf(stderr, "SSB64: port_coroutine_restore on current coroutine\n");
+		abort();
+	}
+	memcpy(&co->ctx, &hdr->ctx, sizeof(co->ctx));
+	co->finished = hdr->finished;
+	memcpy(co->stack_mem + port_page_size(), hdr + 1, port_coroutine_usable_stack(co));
+}
+
 #endif /* !_WIN32 && !__ANDROID__ */

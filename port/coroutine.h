@@ -70,6 +70,25 @@ int port_coroutine_is_finished(PortCoroutine *co);
  */
 int port_coroutine_in_coroutine(void);
 
+/*
+ * Rollback support — snapshot and restore a suspended coroutine in place.
+ *
+ * A GObj "thread" process that has yielded (gcSleepCurrentGObjThread) is
+ * simulation state: its register context and its stack decide what it does
+ * when resumed. Rollback therefore copies both into a blob at snapshot time
+ * and copies them back on restore. The coroutine object itself must still
+ * exist at the same address (sys/netstate.c defers destruction while a
+ * rollback session is active), and must not be the running coroutine.
+ *
+ * Supported by the ucontext (POSIX) and asm (Android) backends. Win32 fibers
+ * are opaque, so port_coroutine_snapshot_supported() returns 0 there and the
+ * size functions return 0; rollback refuses to start on that backend.
+ */
+int port_coroutine_snapshot_supported(void);
+size_t port_coroutine_snapshot_size(PortCoroutine *co);
+void port_coroutine_snapshot(PortCoroutine *co, void *out_blob);
+void port_coroutine_restore(PortCoroutine *co, const void *blob);
+
 #ifdef __cplusplus
 }
 #endif

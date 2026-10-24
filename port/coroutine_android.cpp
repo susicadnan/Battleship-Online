@@ -218,6 +218,53 @@ int port_coroutine_in_coroutine(void) {
     return sCurrentCoroutine != nullptr;
 }
 
+/* ---- Rollback snapshot (see coroutine.h) ---------------------------------
+ * Blob layout: [CoroCtx][finished][usable stack bytes]. */
+struct PortCoroutineBlobHeader {
+    CoroCtx ctx;
+    int     finished;
+};
+
+static size_t port_coroutine_usable_stack(PortCoroutine *co) {
+    size_t ps = (size_t)sysconf(_SC_PAGESIZE);
+    return (co->stack_total > ps) ? (co->stack_total - ps) : 0;
+}
+
+int port_coroutine_snapshot_supported(void) {
+    return 1;
+}
+
+size_t port_coroutine_snapshot_size(PortCoroutine *co) {
+    if (co == nullptr || co->stack_mem == nullptr) return 0;
+    return sizeof(PortCoroutineBlobHeader) + port_coroutine_usable_stack(co);
+}
+
+void port_coroutine_snapshot(PortCoroutine *co, void *out_blob) {
+    auto *hdr = static_cast<PortCoroutineBlobHeader *>(out_blob);
+    if (co == nullptr || out_blob == nullptr || co->stack_mem == nullptr) return;
+    if (co == sCurrentCoroutine) {
+        fprintf(stderr, "SSB64: port_coroutine_snapshot on current coroutine\n");
+        abort();
+    }
+    memcpy(&hdr->ctx, &co->ctx, sizeof(hdr->ctx));
+    hdr->finished = co->finished;
+    memcpy(hdr + 1, static_cast<char *>(co->stack_mem) + (size_t)sysconf(_SC_PAGESIZE),
+           port_coroutine_usable_stack(co));
+}
+
+void port_coroutine_restore(PortCoroutine *co, const void *blob) {
+    auto *hdr = static_cast<const PortCoroutineBlobHeader *>(blob);
+    if (co == nullptr || blob == nullptr || co->stack_mem == nullptr) return;
+    if (co == sCurrentCoroutine) {
+        fprintf(stderr, "SSB64: port_coroutine_restore on current coroutine\n");
+        abort();
+    }
+    memcpy(&co->ctx, &hdr->ctx, sizeof(co->ctx));
+    co->finished = hdr->finished;
+    memcpy(static_cast<char *>(co->stack_mem) + (size_t)sysconf(_SC_PAGESIZE), hdr + 1,
+           port_coroutine_usable_stack(co));
+}
+
 } /* extern "C" */
 
 #endif /* __ANDROID__ */

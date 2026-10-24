@@ -806,6 +806,38 @@ target_include_directories(ssb64_game PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/include
 )
 
+################################################################################
+# Rollback state section (netcode). Groups every writable global of the decomp
+# game code into one named section so sys/netstate.c can snapshot/restore the
+# simulation with a memcpy. See port/netstate_section.h and
+# docs/rollback_design.md. The exclusion regex names the TUs whose state
+# belongs to the host (transport, scheduler, audio, hardware input, OS shims)
+# and must NOT be rewound; keep it in sync with port/netstate_section.ld.
+################################################################################
+option(SSB64_ROLLBACK_STATE_SECTION
+    "Group decomp globals into a snapshotable section (required for rollback netcode)" ON)
+if(SSB64_ROLLBACK_STATE_SECTION)
+    set(SSB64_STATE_EXCLUDE_REGEX
+        "decomp/src/sys/net[a-z]*\\.c$|decomp/src/sys/(scheduler|audio|main|video|framebuffer|rdp|dma|debug|controller|interp)\\.c$|port/stubs/|decomp/src/libultra/")
+    set(SSB64_STATE_SOURCES ${SSB64_DECOMP_SOURCES})
+    list(FILTER SSB64_STATE_SOURCES INCLUDE REGEX "\\.c$")
+    list(FILTER SSB64_STATE_SOURCES EXCLUDE REGEX "${SSB64_STATE_EXCLUDE_REGEX}")
+    set(SSB64_STATE_SECTION_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/port/netstate_section.h")
+    if(MSVC)
+        set_source_files_properties(${SSB64_STATE_SOURCES} PROPERTIES
+            COMPILE_OPTIONS "/FI${SSB64_STATE_SECTION_HEADER}")
+    elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        set_source_files_properties(${SSB64_STATE_SOURCES} PROPERTIES
+            COMPILE_OPTIONS "-include;${SSB64_STATE_SECTION_HEADER}")
+    else()
+        # GCC: per-variable sections, grouped by port/netstate_section.ld on the
+        # executable (applied below, after add_executable).
+        target_compile_options(ssb64_game PRIVATE -fdata-sections)
+        set(SSB64_STATE_NEEDS_LINKER_SCRIPT TRUE)
+    endif()
+    target_compile_definitions(ssb64_game PRIVATE PORT_ROLLBACK_STATE_SECTION=1)
+endif()
+
 # Clang 16+ promoted several historically-warning diagnostics to errors by
 # default, which breaks the decomp C code on macOS/Linux. The decomp was
 # written against IDO 7.1 and relies on implicit function declarations, loose
@@ -918,6 +950,12 @@ else()
     # but the produced executable is `${SSB64_APP_NAME}` — `BattleShip`
     # (US) or `BattleShip-JP` (JP), so the two are distinct applications.
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "${SSB64_APP_NAME}")
+endif()
+
+if(SSB64_STATE_NEEDS_LINKER_SCRIPT)
+    set(SSB64_STATE_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/port/netstate_section.ld")
+    target_link_options(${PROJECT_NAME} PRIVATE "LINKER:-T,${SSB64_STATE_LINKER_SCRIPT}")
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY LINK_DEPENDS "${SSB64_STATE_LINKER_SCRIPT}")
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")

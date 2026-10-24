@@ -33,6 +33,11 @@ Build rollback netcode in phases:
 - `src/sc/scmanager.c` calls `syNetPeerInitDebugEnv()` during port startup, next to replay debug env setup.
 - `src/sc/sc1pmode/sc1pgame.c`, `src/sc/sc1pmode/sc1ptrainingmode.c`, and `src/sc/sc1pmode/sc1pbonusstage.c` remain on `syControllerFuncRead`.
 - `docs/netplay_architecture.md` documents the current input architecture.
+- `src/sys/netstate.c` and `src/sys/netstate.h` implement simulation snapshot/restore (scene arena + grouped decomp globals + GObj-thread coroutine stacks + netinput bookkeeping), the rollback driver `syNetStateRunTick()` that `syTaskmanRunTask()` calls in place of `task_update`, and the `SSB64_ROLLBACK_SYNCTEST=N` self-check. Design: `docs/rollback_design.md`.
+- `port/netstate_section.h` (force-included by CMake into the decomp TUs, minus `SSB64_STATE_EXCLUDE_REGEX`), `port/netstate_optin.h`, `port/netstate_section.ld` (GCC) and `port/stubs/netstate_section.c` group every decomp global into one snapshotable section.
+- `port/coroutine.h` gained `port_coroutine_snapshot/restore` (POSIX + Android backends; Win32 fibers unsupported) and `port/stubs/n64_stubs.c` keeps a registry of GObj coroutines (`port/netstate_coro.h`) with deferred destruction while rollback is active.
+- `src/sys/netinput.c` has a resimulation mode (local slots replay `sSYNetInputHistory`, no hardware poll), `syNetInputSaveState/RestoreState`, and `syNetInputSetRemoteInput()` requests a rollback when a confirmed remote input contradicts a published prediction.
+- `src/sc/sccommon/scvsbattle.c` starts/stops the netstate session with the other net sessions and skips packets/trace/replay side effects while resimulating; `src/sys/taskman.c` also stops any session when the arena is reused.
 
 ## Architecture Rules
 
@@ -45,6 +50,8 @@ Build rollback netcode in phases:
 - Existing battle/fighter code should continue reading `SYController` fields without knowing the input source.
 - Treat `gSYControllerDevices[player]` as the compatibility boundary, not as the source of truth for rollback history.
 - Keep netinput integration scoped to VS battle unless the project explicitly decides to support rollback in another mode.
+- A new decomp `sys/` TU that owns host-side state (sockets, files, audio, timing from the real clock) must be added to `SSB64_STATE_EXCLUDE_REGEX` in CMakeLists.txt **and** the `EXCLUDE_FILE` list in `port/netstate_section.ld`; everything else is snapshotted by default. A per-real-tick side effect inside the tick must check `syNetStateCheckResimulating()`.
+- State that lives outside the arena and the state section (host heap allocations made from decomp code, LUS resources) is invisible to rollback: either keep it in the arena or make it immutable for the match.
 - Keep replay files explicit. Do not serialize raw `SCBattleState`; serialize named metadata fields and rebuild battle state on load.
 - Do not involve framebuffer contents in rollback input design. Framebuffers are render output, not simulation input state.
 
@@ -81,7 +88,10 @@ Build rollback netcode in phases:
 - Duplicate log lines expose transport health: `gap`/`dup`/`ooo` flag sequence regressions independently of staged frame counters because redundant frame bundles hide single packet loss.
 - One-way packet diagnosis is still manual. Keep logging role, local/remote players, tick, staged frames, highest remote tick, dropped packets, late frames, and barrier state when changing netpeer.
 - Narrow gameplay/state hashes exist (`src/sys/netsync.c`), but snapshot/rollback coverage is intentionally shallow until input parity is nailed down.
-- No rollback snapshot/restore API exists yet.
+- Snapshot/restore exists but is **unverified at runtime** (written without a ROM build). First thing to do: build, run `SSB64_ROLLBACK_SYNCTEST=4`, and move any TU/variable the mismatch columns point at into or out of the state section. Do not widen the hash to hide a mismatch.
+- `netpeer.c` still tags outgoing frames with `tick + sSYNetPeerInputDelay`; under rollback that is only consistent at delay 0. Input delay must become a local queue in netinput (both peers apply the same input on the same tick).
+- Nothing suppresses SFX/rumble during resimulation yet; expect doubled sounds after a rollback until Phase 2.
+- Windows cannot snapshot Win32 fibers; rollback refuses to start there until an x86-64 asm context switch replaces them.
 - No STUN/TURN, NAT traversal, relay fallback, matchmaking, or final session owner model exists yet.
 
 ## Desync triage playbook
@@ -102,7 +112,7 @@ When editing `src/sys/netpeer.c`:
 
 - Narrow or broaden `syNetSyncHashBattleFighters()` once desync hotspots are identified via NetSync divergence reports.
 - Design the final VS-facing menu flow: Local VS, Netplay, and Replays as separate user-facing entries.
-- Define save-state boundaries for rollback after replayed input determinism is validated.
+- Run the SyncTest against a recorded replay + trace (`SSB64_REPLAY_PLAY` + `SSB64_SYNC_VERIFY` + `SSB64_ROLLBACK_SYNCTEST`) until it passes a full match, then take the Phase 2 list in `docs/rollback_design.md`.
 
 ## Verification Expectations
 

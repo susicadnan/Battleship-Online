@@ -235,4 +235,31 @@ int port_coroutine_in_coroutine(void)
 	return sCurrentCoroutine != NULL;
 }
 
+/* ---- Rollback snapshot (see coroutine.h) ---------------------------------
+ * Win32 fibers are opaque handles: their stack and register state cannot be
+ * copied. Rollback is unavailable on this backend until a hand-rolled x86-64
+ * context switch (like coroutine_aarch64.S) replaces fibers. */
+int port_coroutine_snapshot_supported(void)
+{
+	return 0;
+}
+
+size_t port_coroutine_snapshot_size(PortCoroutine *co)
+{
+	(void)co;
+	return 0;
+}
+
+void port_coroutine_snapshot(PortCoroutine *co, void *out_blob)
+{
+	(void)co;
+	(void)out_blob;
+}
+
+void port_coroutine_restore(PortCoroutine *co, const void *blob)
+{
+	(void)co;
+	(void)blob;
+}
+
 #endif /* _WIN32 */
