@@ -47,6 +47,9 @@ void port_lobby_cancel(void);
 
 int port_lobby_state(void);
 const char *port_lobby_status(void);   /* one line for the UI */
+
+/* From sys/netpeer.c when a match ends abnormally (peer gone, quit). */
+void port_lobby_notify_match_over(const char *reason);
 const char *port_lobby_public_addr(void); /* "" until registered */
 
 #ifdef __cplusplus

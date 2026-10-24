@@ -391,6 +391,14 @@ extern "C" void port_lobby_cancel(void)
 	set_state(PORT_LOBBY_IDLE, "Not connected");
 }
 
+extern "C" void port_lobby_notify_match_over(const char *reason)
+{
+	/* netpeer already closed the socket it owned. */
+	g.sock = -1;
+	g.friend_code.clear();
+	set_state(PORT_LOBBY_FAILED, std::string("Match ended: ") + (reason ? reason : "unknown"));
+}
+
 extern "C" int port_lobby_state(void) { return g.state; }
 extern "C" const char *port_lobby_status(void) { return g.status.c_str(); }
 extern "C" const char *port_lobby_public_addr(void) { return g.public_addr.c_str(); }
