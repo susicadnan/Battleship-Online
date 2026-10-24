@@ -545,6 +545,10 @@ if (SSB64_COROUTINE_MASM)
     # Visual Studio generator a MASM object does not land where
     # WINDOWS_EXPORT_ALL_SYMBOLS' .def generation (objects.txt) expects it,
     # and the link fails with "Couldn't open file ... coroutine_win64.asm.obj".
+    # The VS generator otherwise files the .asm under <None> (never assembled)
+    # even with ASM_MASM enabled; name the language explicitly.
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/port/coroutine_win64.asm
+        PROPERTIES LANGUAGE ASM_MASM)
     add_library(ssb64_coroutine_masm STATIC ${CMAKE_CURRENT_SOURCE_DIR}/port/coroutine_win64.asm)
     # Only MASM sources: tell CMake how to archive it, or no .lib is produced
     # and the executable's link fails with LNK1181.
