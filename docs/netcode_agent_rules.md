@@ -95,7 +95,7 @@ Build rollback netcode in phases:
 - `SSB64_NETINPUT_FAKE=1` replaces hardware input for local slots with a deterministic pattern (changes every 20 ticks), so two headless instances exercise mispredictions and rollbacks. End-to-end check that passes on Linux: host + peer over loopback, delay 0, fake input, 2400 frames, every `NetSync ... figh=` line identical on both sides.
 - **Open bug:** `SSB64_ROLLBACK_SYNCTEST=N` combined with real rollbacks (netplay + fake input, delay 0) hangs the host's game thread around tick 300 with nothing in the log (rendering continues, ticks stop). SyncTest alone (idle match) and real rollbacks alone both pass, so it is specific to a rollback resimulation followed by a SyncTest resimulation in the same tick. Suspect the GObj coroutine registry (restore_set/collect ordering). Needs a debugger attached to the hung process.
 - Windows x64 MSVC builds use `port/coroutine_win64.asm` instead of fibers so coroutine stacks can be snapshotted; `netpeer.c` is still `!_WIN32` (no WinSock), so netplay itself does not run on Windows yet.
-- No STUN/TURN, NAT traversal, relay fallback, matchmaking, or final session owner model exists yet.
+- Connect codes, rendezvous server and UDP hole punching exist (`docs/netplay_connect_codes.md`: `tools/netplay/rendezvous_server.py`, `port/netplay/lobby.cpp`, Settings → Netplay). No relay fallback for symmetric NATs and no time-sync between peers yet.
 
 ## Desync triage playbook
 
