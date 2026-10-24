@@ -48,6 +48,7 @@ ssb64_save.bin
 asm/
 *.d
 *.ld
+!port/netstate_section.ld
 *.o
 *.credits.encoded
 *.credits.metadata
