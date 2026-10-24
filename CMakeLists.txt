@@ -21,6 +21,16 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Android")
     enable_language(ASM)
 endif()
 
+# Windows x64 on the MSVC toolset replaces Win32 fibers with a MASM context
+# switch (port/coroutine_win64.asm + coroutine_win64.cpp) so rollback netcode
+# can snapshot coroutine stacks. Other Windows targets keep the fiber backend.
+if (MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8
+    AND NOT CMAKE_GENERATOR_PLATFORM MATCHES "ARM64"
+    AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+    enable_language(ASM_MASM)
+    set(SSB64_COROUTINE_MASM TRUE)
+endif()
+
 # Mod system master switch (TinyCC source scripting + funchook hook backend +
 # port/mods). DISABLE_SCRIPTING gates it everywhere — funchook FetchContent,
 # port/mods sources, the no-inline linkage tweaks, the post-build .tcc/ staging,
@@ -530,6 +540,9 @@ list(APPEND SSB64_SRC_PORT
 # coroutine_test.cpp has its own main(); only built standalone when
 # SSB64_BUILD_COROUTINE_TEST=ON below. Never link it into the game.
 list(FILTER SSB64_SRC_PORT EXCLUDE REGEX "port/coroutine_test\\.cpp$")
+if (SSB64_COROUTINE_MASM)
+    list(APPEND SSB64_SRC_PORT ${CMAKE_CURRENT_SOURCE_DIR}/port/coroutine_win64.asm)
+endif()
 # port/mods/ (HookManager + SymbolResolver) wraps funchook, which isn't
 # fetched when the mod system is disabled. Drop it so nothing references the
 # missing backend. port/hooks/ (the event dispatch system) is funchook-free

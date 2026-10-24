@@ -6,9 +6,13 @@
  * in SwitchToFiber calls. Resume/yield are symmetric SwitchToFiber calls.
  *
  * Stack canaries (0xDEADBEEF / 0xCAFEBABE) are used to detect corruption.
+ *
+ * x64 MSVC builds use coroutine_win64.cpp (hand-rolled context switch that
+ * rollback can snapshot) instead; this backend remains for other Windows
+ * targets (ARM64, non-MSVC toolchains), where rollback is unavailable.
  */
 
-#ifdef _WIN32
+#if defined(_WIN32) && !(defined(_MSC_VER) && defined(_M_X64))
 
 #include "coroutine.h"
 #include "port_watchdog.h"
@@ -262,4 +266,4 @@ void port_coroutine_restore(PortCoroutine *co, const void *blob)
 	(void)blob;
 }
 
-#endif /* _WIN32 */
+#endif /* _WIN32 && !(x64 MSVC) */

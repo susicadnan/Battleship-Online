@@ -9,7 +9,8 @@
  * GObj thread processes also use coroutines for their yield/resume cycle.
  *
  * Platform backends:
- *   - Windows: Win32 Fibers (CreateFiber / SwitchToFiber)
+ *   - Windows x64 (MSVC): hand-rolled context switch (coroutine_win64.asm)
+ *   - Windows (other): Win32 Fibers (CreateFiber / SwitchToFiber)
  *   - POSIX:   ucontext_t  (makecontext / swapcontext)
  */
 
