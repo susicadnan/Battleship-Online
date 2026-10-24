@@ -91,8 +91,19 @@ direct connect.
   and adds a hop of latency; there is no limit on concurrent relays yet.
 - Fighters and stage are picked on the Netplay page, not in the CSS. Only
   the host's stage pick counts.
-- The socket is closed when the battle ends; a rematch goes through the
-  lobby again.
+- Rematch is implemented but has only been compiled and reviewed, not played
+  to the end of a game in a test (the headless tests never finish a match).
+
+## Rematch
+
+When a game of a lobby match ends normally, `syNetPeerStopVSSession` keeps
+the punched socket and marks the session post-match; the Netplay page
+shows Rematch / Leave. Each side that presses Rematch sends a `REMATCH`
+control packet (ping-sized, carrying its fighter pick) every half second;
+when both have, the host re-runs the match config exchange with a fresh
+seed and both drop back into the battle. Leave closes the socket; a new
+opponent goes through the server again. `SSB64_LOBBY_AUTO_REMATCH=1` asks
+for one automatically a second after each game.
 
 ## Disconnects
 
