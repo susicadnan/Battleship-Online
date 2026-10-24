@@ -22,10 +22,21 @@ survives in the decomp:
 | Decomp globals (`gSCManagerBattleState`, RNG seed, `gGCCommonLinks`, fighter manager counters, map collision, menu/interface state, function-scope `static`s…) | `.data`/`.bss` of ~1 000 translation units | Build-time grouping into one named section (below); `memcpy` of the range |
 | Suspended GObj *thread* processes (`nGCProcessKindThread`: announcer, countdown, entry focus…) | `PortCoroutine` heap object + `mmap`ed 64 KB stack (`port/coroutine_*.cpp`) | Registry in `port/stubs/n64_stubs.c`; blob = saved register context + stack, restored in place |
 | netinput tick / last-published / checksums | `sys/netinput.c` | `SYNetInputState`, saved explicitly (the TU itself is *not* in the section) |
+| Port bookkeeping *about* arena bytes: which sprites/bitmaps/vertices/texels are already in native byte order (`lbreloc_byteswap.cpp`), the live reloc-file range registry and extern-file bump cursor (`lbreloc_bridge.cpp`), how far the token table was handed out (`RelocPointerTable.cpp`) | C++ statics in `port/` (outside the state section by construction) | `port/netstate_host.cpp`: one blob per slot. The byte-order sets are journaled while a session is active (a snapshot is a journal mark, restore undoes past it); the others are copied. |
 
 Pointers inside the state keep pointing at the same addresses after a restore
 because every object is restored to the address it was saved from; nothing is
 relocated.
+
+The last row was found by the first SyncTest run: the port converts reloc file
+data to native byte order lazily and in place, remembering per address that it
+has done so. Restoring an arena image from before such a conversion while the
+"already done" set still said yes made `lbCommonMakeSObjForGObj` read a
+big-endian sprite as if it were native and crash on a garbage token. Any new
+host-side cache keyed by arena address that the simulation *reads through* has
+to be added to `port/netstate_host.cpp`; caches that only affect rendering
+(texture uploads, widened display lists) do not, because a re-simulated load
+recreates identical bytes at the same address.
 
 ### The state section
 

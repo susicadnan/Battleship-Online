@@ -261,4 +261,50 @@ void portRelocResetPointerTable(void)
     sFreeIndices.clear();
 }
 
+/**
+ * Rollback marks (port/netstate_host.cpp). A mark records how far the table
+ * had been handed out; restoring it forgets every token minted since, so a
+ * re-simulated file load mints the same indices again instead of leaking a
+ * slot per rolled-back registration. Slots keep their generation: a token
+ * minted after the mark fails decode once sNextIndex is rewound, and the
+ * next registration of that index bumps the generation anyway.
+ */
+struct PortRelocTableMark {
+    uint32_t next_index;
+    std::vector<uint32_t> free_indices;
+};
+
+void *portRelocPointerTableSaveMark(void)
+{
+    PortRelocTableMark *mark = new PortRelocTableMark;
+    mark->next_index = sNextIndex;
+    mark->free_indices = sFreeIndices;
+    return mark;
+}
+
+void portRelocPointerTableRestoreMark(const void *blob)
+{
+    const PortRelocTableMark *mark = static_cast<const PortRelocTableMark *>(blob);
+    if (mark == nullptr || sSlots == nullptr || mark->next_index > sNextIndex) {
+        return;
+    }
+    for (uint32_t i = mark->next_index; i < sNextIndex; i++) {
+        sSlots[i].ptr = nullptr;
+    }
+    /* Indices that were free at the mark and have been reused since hold
+     * pointers nothing in the restored state references. */
+    for (uint32_t i : mark->free_indices) {
+        if (i < sNextIndex) {
+            sSlots[i].ptr = nullptr;
+        }
+    }
+    sNextIndex = mark->next_index;
+    sFreeIndices = mark->free_indices;
+}
+
+void portRelocPointerTableFreeMark(void *blob)
+{
+    delete static_cast<PortRelocTableMark *>(blob);
+}
+
 } /* extern "C" */

@@ -170,8 +170,12 @@ void port_gobj_coroutine_restore_set(const PortGObjCoroutineRecord *saved, int c
 	for (int j = 0; j < count; j++) {
 		int i = port_gobj_coroutine_find(saved[j].co);
 		if (i < 0) {
-			port_log("SSB64 NetState: saved GObj coroutine %p is gone — collection window too short\n",
-			         (void *)saved[j].co);
+			/* A parked (dead) entry that has since been collected needs no
+			 * resurrection; only a live one going missing is a bug. */
+			if (saved[j].alive) {
+				port_log("SSB64 NetState: saved GObj coroutine %p is gone — collection window too short\n",
+				         (void *)saved[j].co);
+			}
 			continue;
 		}
 		sGObjCoroutines[i].alive = saved[j].alive;

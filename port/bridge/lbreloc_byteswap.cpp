@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -593,25 +594,231 @@ static void tex_dump_chain(int file_id, uint32_t file_off,
 	}
 }
 
+// ============================================================
+//  Rollback journal for the fixup bookkeeping below
+// ============================================================
+//
+// Every container in this section records which bytes of arena memory have
+// already been converted to native byte order (or protected from the runtime
+// BSWAP). That makes them simulation state: when sys/netstate.c restores an
+// older arena image, the bookkeeping has to go back with it, otherwise a
+// sprite that was fixed up after the snapshot is skipped on the re-run and
+// its big-endian bytes are read as a token (the first SyncTest crash: stale
+// token in lbCommonMakeSObjForGObj → SIGSEGV decoding sprite bitmaps).
+//
+// The containers are large (sTexFixupWords holds one entry per texel word)
+// and change little from tick to tick, so rather than copying them per
+// snapshot every mutation is appended to an undo journal while a rollback
+// session is active. A snapshot is a journal position; restoring one undoes
+// the entries past it. Outside a session the journal is off and costs
+// nothing. Driven by port/netstate_host.cpp.
+
+enum FixupJournalContainer : uint8_t
+{
+	FJ_C_STRUCT = 0,   // sStructU16Fixups
+	FJ_C_TEXWORDS,     // sTexFixupWords
+	FJ_C_DESWIZZLE,    // sDeswizzle4cFixups
+	FJ_C_CHAINSLOT,    // sChainSlotAddrs
+	FJ_C_EXTENT,       // sTexFixupExtent
+	FJ_C_PROTECTED,    // sProtectedStructRanges
+};
+
+enum FixupJournalOp : uint8_t
+{
+	FJ_SET_INSERT,   // key inserted into a set         — undo: erase
+	FJ_SET_ERASE,    // key erased from a set           — undo: insert
+	FJ_MAP_INSERT,   // new map key, value              — undo: erase
+	FJ_MAP_UPDATE,   // existing key, value = old value — undo: put old value back
+	FJ_MAP_ERASE,    // key erased, value = old value   — undo: insert
+	FJ_RANGE_PUSH,   // range [key, value) appended     — undo: remove it
+	FJ_RANGE_ERASE,  // range [key, value) removed      — undo: append it
+};
+
+struct FixupJournalEntry
+{
+	uint8_t container;
+	uint8_t op;
+	uintptr_t key;
+	uintptr_t value;
+};
+
+static std::deque<FixupJournalEntry> sFixupJournal;
+static uint64_t sFixupJournalBase = 0;   // sequence number of sFixupJournal.front()
+static bool sFixupJournalOn = false;
+
+static inline void fixup_journal(uint8_t container, uint8_t op, uintptr_t key, uintptr_t value)
+{
+	if (sFixupJournalOn)
+		sFixupJournal.push_back({ container, op, key, value });
+}
+
+// Drop-in for the std::unordered_set<uintptr_t> the fixup paths used before;
+// only the mutating members differ (they journal).
+class JournaledAddrSet
+{
+public:
+	using Set = std::unordered_set<uintptr_t>;
+	using iterator = Set::iterator;
+
+	explicit JournaledAddrSet(uint8_t id) : mId(id) {}
+
+	size_t count(uintptr_t k) const { return mSet.count(k); }
+	iterator find(uintptr_t k) { return mSet.find(k); }
+	iterator begin() { return mSet.begin(); }
+	iterator end() { return mSet.end(); }
+	size_t size() const { return mSet.size(); }
+
+	void insert(uintptr_t k)
+	{
+		if (mSet.insert(k).second)
+			fixup_journal(mId, FJ_SET_INSERT, k, 0);
+	}
+	void erase(uintptr_t k)
+	{
+		if (mSet.erase(k) != 0)
+			fixup_journal(mId, FJ_SET_ERASE, k, 0);
+	}
+	iterator erase(iterator it)
+	{
+		fixup_journal(mId, FJ_SET_ERASE, *it, 0);
+		return mSet.erase(it);
+	}
+	void clear()
+	{
+		if (sFixupJournalOn)
+			for (uintptr_t k : mSet) fixup_journal(mId, FJ_SET_ERASE, k, 0);
+		mSet.clear();
+	}
+
+	// Journal replay only — never journaled themselves.
+	void undo(const FixupJournalEntry &e)
+	{
+		if (e.op == FJ_SET_INSERT) mSet.erase(e.key);
+		else mSet.insert(e.key);
+	}
+
+private:
+	Set mSet;
+	uint8_t mId;
+};
+
+class JournaledExtentMap
+{
+public:
+	using Map = std::unordered_map<uintptr_t, unsigned int>;
+	using iterator = Map::iterator;
+
+	iterator find(uintptr_t k) { return mMap.find(k); }
+	iterator begin() { return mMap.begin(); }
+	iterator end() { return mMap.end(); }
+
+	void set(uintptr_t k, unsigned int v)
+	{
+		auto it = mMap.find(k);
+		if (it == mMap.end()) {
+			mMap.emplace(k, v);
+			fixup_journal(FJ_C_EXTENT, FJ_MAP_INSERT, k, v);
+		} else if (it->second != v) {
+			fixup_journal(FJ_C_EXTENT, FJ_MAP_UPDATE, k, it->second);
+			it->second = v;
+		}
+	}
+	iterator erase(iterator it)
+	{
+		fixup_journal(FJ_C_EXTENT, FJ_MAP_ERASE, it->first, it->second);
+		return mMap.erase(it);
+	}
+	void clear()
+	{
+		if (sFixupJournalOn)
+			for (const auto &kv : mMap) fixup_journal(FJ_C_EXTENT, FJ_MAP_ERASE, kv.first, kv.second);
+		mMap.clear();
+	}
+
+	void undo(const FixupJournalEntry &e)
+	{
+		if (e.op == FJ_MAP_INSERT) mMap.erase(e.key);
+		else mMap[e.key] = static_cast<unsigned int>(e.value);
+	}
+
+private:
+	Map mMap;
+};
+
+struct ProtectedRange { uintptr_t begin; uintptr_t end; };
+
+class JournaledRanges
+{
+public:
+	using Vec = std::vector<ProtectedRange>;
+	using const_iterator = Vec::const_iterator;
+
+	const_iterator begin() const { return mVec.begin(); }
+	const_iterator end() const { return mVec.end(); }
+
+	void push_back(const ProtectedRange &r)
+	{
+		mVec.push_back(r);
+		fixup_journal(FJ_C_PROTECTED, FJ_RANGE_PUSH, r.begin, r.end);
+	}
+	// std::remove_if applies the predicate exactly once per element, so
+	// journaling inside it records each removed range once.
+	template <class Pred> void erase_if(Pred pred)
+	{
+		mVec.erase(std::remove_if(mVec.begin(), mVec.end(),
+		                          [&](const ProtectedRange &r) {
+		                              bool rm = pred(r);
+		                              if (rm) fixup_journal(FJ_C_PROTECTED, FJ_RANGE_ERASE, r.begin, r.end);
+		                              return rm;
+		                          }),
+		           mVec.end());
+	}
+	void clear()
+	{
+		if (sFixupJournalOn)
+			for (const auto &r : mVec) fixup_journal(FJ_C_PROTECTED, FJ_RANGE_ERASE, r.begin, r.end);
+		mVec.clear();
+	}
+
+	void undo(const FixupJournalEntry &e)
+	{
+		if (e.op == FJ_RANGE_PUSH) {
+			// Undo runs newest-first, so the pushed range is the last match.
+			for (auto it = mVec.end(); it != mVec.begin();) {
+				--it;
+				if (it->begin == e.key && it->end == e.value) {
+					mVec.erase(it);
+					break;
+				}
+			}
+		} else {
+			mVec.push_back({ e.key, e.value });
+		}
+	}
+
+private:
+	Vec mVec;
+};
+
 // Tracks which (base + offset) regions have been fixed to prevent
 // double-fixup. Used by per-struct fixups (Sprite, Bitmap, MObjSub, etc.),
 // pass2 vertex fixups, the chain-walk texture fixup, and the runtime
 // lazy vertex fixup. All paths share this set so they don't undo each
 // other's work. Cleared at scene change via portResetStructFixups.
-static std::unordered_set<uintptr_t> sStructU16Fixups;
+static JournaledAddrSet sStructU16Fixups(FJ_C_STRUCT);
 
 // Tracks runtime texture bases that own at least one fixed word, plus the
 // largest request size seen from that base. This preserves the old pass2/chain
 // skip behavior for exact-base matches while sTexFixupWords handles the actual
 // per-word idempotency.
-static std::unordered_map<uintptr_t, unsigned int> sTexFixupExtent;
+static JournaledExtentMap sTexFixupExtent;
 
 // Runtime texture/TLUT fixups can overlap even when they start at different
 // addresses. CSS gate palettes are adjacent 0x28-byte blocks, but their Sprite
 // requests a 512-byte TLUT load from each block. Track each u32 word so the
 // second overlapping load skips words fixed by the first instead of BSWAPing
 // them back to the wrong byte order.
-static std::unordered_set<uintptr_t> sTexFixupWords;
+static JournaledAddrSet sTexFixupWords(FJ_C_TEXWORDS);
 
 // Tracks memory ranges of decoded struct arrays that runtime texture/palette
 // BSWAPs must NOT touch. Certain N64 sprite files intentionally overlap the
@@ -623,13 +830,12 @@ static std::unordered_set<uintptr_t> sTexFixupWords;
 //
 // Entries are (begin, end) pairs. Cleared at scene change via
 // portResetStructFixups.
-struct ProtectedRange { uintptr_t begin; uintptr_t end; };
-static std::vector<ProtectedRange> sProtectedStructRanges;
+static JournaledRanges sProtectedStructRanges;
 
 // Separate tracking for post-decode 4c sprite deswizzle (portDeswizzleDecodedSprite4c).
 // Needs its own set because portFixupSpriteBitmapData already inserted the same buf
 // addresses during the pre-decode BSWAP32 pass.
-static std::unordered_set<uintptr_t> sDeswizzle4cFixups;
+static JournaledAddrSet sDeswizzle4cFixups(FJ_C_DESWIZZLE);
 
 /* Absolute addresses of every tokenized reloc chain slot currently live.
  * Texel data never contains chain slots, so a runtime texture fixup whose
@@ -640,7 +846,61 @@ static std::unordered_set<uintptr_t> sDeswizzle4cFixups;
  * unrecognizable, item spawn walks running off the array into float data
  * → textureless objects, "impossible" token warnings (byte-swapped
  * tokens), and SIGSEGV in gcSetupCustomDObjsWithMObj. */
-static std::unordered_set<uintptr_t> sChainSlotAddrs;
+static JournaledAddrSet sChainSlotAddrs(FJ_C_CHAINSLOT);
+
+static void fixup_journal_undo(const FixupJournalEntry &e)
+{
+	switch (e.container) {
+	case FJ_C_STRUCT:    sStructU16Fixups.undo(e); break;
+	case FJ_C_TEXWORDS:  sTexFixupWords.undo(e); break;
+	case FJ_C_DESWIZZLE: sDeswizzle4cFixups.undo(e); break;
+	case FJ_C_CHAINSLOT: sChainSlotAddrs.undo(e); break;
+	case FJ_C_EXTENT:    sTexFixupExtent.undo(e); break;
+	case FJ_C_PROTECTED: sProtectedStructRanges.undo(e); break;
+	default: break;
+	}
+}
+
+/* Journal control, called by port/netstate_host.cpp. Marks are monotonic
+ * sequence numbers: Mark() names the present, Rewind(m) undoes everything
+ * recorded since m, Trim(m) forgets history older than m once no snapshot
+ * can restore to it. Rewind refuses a mark outside the retained window and
+ * returns 0 so the caller can report the rollback as failed. */
+extern "C" void portStructFixupsJournalEnable(int on)
+{
+	sFixupJournal.clear();
+	sFixupJournalBase = 0;
+	sFixupJournalOn = (on != 0);
+}
+
+extern "C" uint64_t portStructFixupsJournalMark(void)
+{
+	return sFixupJournalBase + sFixupJournal.size();
+}
+
+extern "C" int portStructFixupsJournalRewind(uint64_t mark)
+{
+	if (mark < sFixupJournalBase || mark > sFixupJournalBase + sFixupJournal.size())
+		return 0;
+	while (sFixupJournalBase + sFixupJournal.size() > mark) {
+		fixup_journal_undo(sFixupJournal.back());
+		sFixupJournal.pop_back();
+	}
+	return 1;
+}
+
+extern "C" void portStructFixupsJournalTrim(uint64_t oldest_mark)
+{
+	while (sFixupJournalBase < oldest_mark && !sFixupJournal.empty()) {
+		sFixupJournal.pop_front();
+		sFixupJournalBase++;
+	}
+}
+
+extern "C" size_t portStructFixupsJournalLength(void)
+{
+	return sFixupJournal.size();
+}
 
 extern "C" void portRelocNoteChainSlot(const void *slot)
 {
@@ -1058,7 +1318,7 @@ extern "C" void portEvictStructFixupsInRange(const void *begin, size_t size)
 	uintptr_t lo = reinterpret_cast<uintptr_t>(begin);
 	uintptr_t hi = lo + size;
 
-	auto evict_set = [&](std::unordered_set<uintptr_t> &s) {
+	auto evict_set = [&](JournaledAddrSet &s) {
 		for (auto it = s.begin(); it != s.end(); ) {
 			if (*it >= lo && *it < hi) it = s.erase(it);
 			else ++it;
@@ -1074,12 +1334,9 @@ extern "C" void portEvictStructFixupsInRange(const void *begin, size_t size)
 		else ++it;
 	}
 
-	sProtectedStructRanges.erase(
-		std::remove_if(sProtectedStructRanges.begin(), sProtectedStructRanges.end(),
-		               [&](const ProtectedRange &r) {
-		                   return r.begin < hi && r.end > lo;
-		               }),
-		sProtectedStructRanges.end());
+	sProtectedStructRanges.erase_if([&](const ProtectedRange &r) {
+		return r.begin < hi && r.end > lo;
+	});
 }
 
 // For raw texel blobs loaded via a runtime-built SETTIMG (where pass2's
@@ -1232,7 +1489,7 @@ static int chain_fixup_settimg(void *file_base, size_t file_size,
 	}
 	auto extent_it = sTexFixupExtent.find(reg_base);
 	if (extent_it == sTexFixupExtent.end() || extent_it->second < tex_bytes)
-		sTexFixupExtent[reg_base] = tex_bytes;
+		sTexFixupExtent.set(reg_base, tex_bytes);
 
 	// Diagnostic: record what was just fixed (chain-walk path).
 	if (tex_log_enabled() || tex_dump_enabled()) {
@@ -1646,7 +1903,7 @@ extern "C" void portRelocFixupTextureAtRuntime(const void *addr, unsigned int nu
 	sStructU16Fixups.insert(target);
 	auto extent_it = sTexFixupExtent.find(target);
 	if (extent_it == sTexFixupExtent.end() || extent_it->second < num_bytes)
-		sTexFixupExtent[target] = num_bytes;
+		sTexFixupExtent.set(target, num_bytes);
 
 	if (tex_log_enabled()) {
 		int rt_file_id = portRelocFindFileIdAndBase(addr, nullptr);

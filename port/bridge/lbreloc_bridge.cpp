@@ -133,6 +133,70 @@ struct PortRelocFileRange
 
 static std::vector<PortRelocFileRange> sPortRelocFileRanges;
 
+/* ---- Rollback snapshot of this TU's bookkeeping (port/netstate_host.h).
+ * The file-range registry and the extern-file bump cursor describe which
+ * reloc files are live in the arena. A tick that loads one (an item spawn)
+ * and is then rolled back has to give them back too, or the re-simulated
+ * load lands at a different address than the original run. The DL-range
+ * registry (port_dl_ranges) is re-synced from the restored list. */
+struct PortRelocBridgeSnapshot
+{
+	std::vector<PortRelocFileRange> ranges;
+	u32 *extern_file_ids;
+	s32 extern_file_ids_num;
+	s32 extern_file_ids_max;
+	void *extern_file_heap;
+};
+
+extern "C" void *portRelocBridgeSnapshot(void)
+{
+	auto *snap = new PortRelocBridgeSnapshot;
+	snap->ranges = sPortRelocFileRanges;
+	snap->extern_file_ids = sLBRelocExternFileIDs;
+	snap->extern_file_ids_num = sLBRelocExternFileIDsNum;
+	snap->extern_file_ids_max = sLBRelocExternFileIDsMax;
+	snap->extern_file_heap = sLBRelocExternFileHeap;
+	return snap;
+}
+
+extern "C" void portRelocBridgeRestore(const void *blob)
+{
+	const auto *snap = static_cast<const PortRelocBridgeSnapshot *>(blob);
+	if (snap == nullptr)
+	{
+		return;
+	}
+	for (const auto &r : sPortRelocFileRanges)
+	{
+		bool kept = false;
+		for (const auto &o : snap->ranges)
+		{
+			if (o.base == r.base) { kept = true; break; }
+		}
+		if (!kept && (r.size != 0))
+		{
+			port_dl_range_unregister(reinterpret_cast<const void *>(r.base));
+		}
+	}
+	sPortRelocFileRanges = snap->ranges;
+	for (const auto &r : sPortRelocFileRanges)
+	{
+		if (r.size != 0)
+		{
+			port_dl_range_register(reinterpret_cast<const void *>(r.base), r.size, r.path ? r.path : "reloc?");
+		}
+	}
+	sLBRelocExternFileIDs = snap->extern_file_ids;
+	sLBRelocExternFileIDsNum = snap->extern_file_ids_num;
+	sLBRelocExternFileIDsMax = snap->extern_file_ids_max;
+	sLBRelocExternFileHeap = snap->extern_file_heap;
+}
+
+extern "C" void portRelocBridgeFreeSnapshot(void *blob)
+{
+	delete static_cast<PortRelocBridgeSnapshot *>(blob);
+}
+
 static void portRelocEvictFileRangesInRange(void *base, size_t size)
 {
 	if ((base == nullptr) || (size == 0))
