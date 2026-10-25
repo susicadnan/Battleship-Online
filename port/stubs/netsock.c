@@ -263,7 +263,17 @@ void port_netsock_sleep_us(uint32_t usecs)
 uint32_t port_netsock_now_ms(void)
 {
 #ifdef _WIN32
-	return (uint32_t)GetTickCount64();
+	/* Not GetTickCount64: it only moves every 15.6 ms, which is about a
+	 * frame of error in every ping sample. */
+	static LARGE_INTEGER freq;
+	LARGE_INTEGER now;
+
+	if (freq.QuadPart == 0)
+	{
+		QueryPerformanceFrequency(&freq);
+	}
+	QueryPerformanceCounter(&now);
+	return (uint32_t)((now.QuadPart / freq.QuadPart) * 1000u + ((now.QuadPart % freq.QuadPart) * 1000u) / freq.QuadPart);
 #else
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
