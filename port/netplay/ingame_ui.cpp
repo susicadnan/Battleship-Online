@@ -78,7 +78,9 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 		DrawRequests();
 
 		if (state == PORT_LOBBY_HOSTING) {
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 34.0f * ImGui::GetFontSize());
 			ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.6f, 1.0f), "%s", port_lobby_status());
+			ImGui::PopTextWrapPos();
 			ImGui::BulletText("%s (you, host)", port_lobby_code());
 			for (int i = 0; i < port_lobby_host_guest_count(); i++) ImGui::BulletText("%s", port_lobby_host_guest_code(i));
 			DrawGroupSettings();
@@ -152,9 +154,11 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 		ImGui::TextDisabled("(2 for most connections)");
 
 		const char *status = port_lobby_status();
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 34.0f * ImGui::GetFontSize()); /* auto-resized panel: failure hints would stretch it */
 		if (state == PORT_LOBBY_FAILED) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", status);
 		else if (state != PORT_LOBBY_IDLE) ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.6f, 1.0f), "%s", status);
 		else ImGui::TextDisabled("%s", status);
+		ImGui::PopTextWrapPos();
 		ImGui::SetWindowFontScale(1.0f);
 	}
 
