@@ -12,13 +12,67 @@
 #include "resource/RelocPointerTable.h"
 
 #include <cstdint>
+#include <deque>
 #include <unordered_set>
 #include <vector>
 
 namespace {
 
-std::unordered_set<uintptr_t> sUnswappedHeads;
-std::unordered_set<uintptr_t> sRejectedHeads;  /* walked once, didn't look like EVENT32 — don't retry */
+/* Rollback journal. The fighter figatree heaps live in the scene arena, so
+ * a rollback puts their bytes back as they were; the "already fixed" sets
+ * below describe those bytes and have to go back with them. Otherwise a
+ * re-simulated tick sees bytes from before a reload with the verdicts from
+ * after it, and un-halfswaps a block a second time (or skips one): the
+ * animation reads garbage for a frame or two. Found by the SyncTest as
+ * Samus raising her shield on Planet Zebes (Wait and GuardOn reload the
+ * same heap in one tick). Enabled by port/netstate_host.cpp. */
+enum JournalOp : uint8_t { J_INSERT, J_ERASE, J_RANGE_PUSH, J_RANGE_END };
+
+struct JournalEntry {
+    uint8_t set;
+    uint8_t op;
+    uintptr_t key;
+    uintptr_t value;
+};
+
+std::deque<JournalEntry> sJournal;
+/* Only bytes rollback restores (the scene arena) get their verdicts undone;
+ * anything elsewhere stays converted, so its verdict must stay too. */
+uintptr_t sJournalLo = 0, sJournalHi = 0;
+uint64_t sJournalBase = 0;
+bool sJournalOn = false;
+inline bool journaled(uintptr_t k) { return sJournalOn && k >= sJournalLo && k < sJournalHi; }
+
+class JournaledSet {
+public:
+    explicit JournaledSet(uint8_t id) : mId(id) {}
+    size_t count(uintptr_t k) const { return mSet.count(k); }
+    bool insert(uintptr_t k) {
+        bool fresh = mSet.insert(k).second;
+        if (fresh && journaled(k)) sJournal.push_back({ mId, J_INSERT, k, 0 });
+        return fresh;
+    }
+    template <typename Pred> void erase_if(Pred pred) {
+        for (auto it = mSet.begin(); it != mSet.end();) {
+            if (pred(*it)) {
+                if (journaled(*it)) sJournal.push_back({ mId, J_ERASE, *it, 0 });
+                it = mSet.erase(it);
+            } else ++it;
+        }
+    }
+    void clear() { erase_if([](uintptr_t) { return true; }); }
+    void undo(const JournalEntry &e) {
+        if (e.op == J_INSERT) mSet.erase(e.key);
+        else mSet.insert(e.key);
+    }
+
+private:
+    uint8_t mId;
+    std::unordered_set<uintptr_t> mSet;
+};
+
+JournaledSet sUnswappedHeads(0);
+JournaledSet sRejectedHeads(1);  /* walked once, didn't look like EVENT32 — don't retry */
 
 /* Registered fighter-figatree file ranges (base, end).  The walker only
  * operates on head pointers that fall within one of these — this guards
@@ -31,7 +85,24 @@ std::vector<Range> sHalfswappedRanges;
  * spline-data un-halfswap).  Cleared per-range when
  * port_aobj_register_halfswapped_range adds a new range so that
  * figatree-heap reloads at the same address get re-fixed. */
-std::unordered_set<uintptr_t> sUnhalfswappedVisited;
+JournaledSet sUnhalfswappedVisited(2);
+
+void journal_undo(const JournalEntry &e) {
+    switch (e.set) {
+    case 0: sUnswappedHeads.undo(e); break;
+    case 1: sRejectedHeads.undo(e); break;
+    case 2: sUnhalfswappedVisited.undo(e); break;
+    default:
+        if (e.op == J_RANGE_PUSH) {
+            if (!sHalfswappedRanges.empty()) sHalfswappedRanges.pop_back();
+        } else {
+            for (auto &range : sHalfswappedRanges) {
+                if (range.base == e.key) range.end = e.value;
+            }
+        }
+        break;
+    }
+}
 
 bool is_in_halfswapped_range(const void *p) {
     uintptr_t addr = reinterpret_cast<uintptr_t>(p);
@@ -324,32 +395,29 @@ extern "C" void port_aobj_register_halfswapped_range(void *base, unsigned long s
      * anim", leaving TransN.translate at (0,0,0) for the rest of the
      * attack.  Same shape as project_fixup_idempotency_heap_reuse: cache
      * keyed on pointer, heap reuses addresses, fresh bytes skip fixup. */
-    auto evict = [&](std::unordered_set<uintptr_t> &set) {
-        for (auto it = set.begin(); it != set.end(); ) {
-            if (*it >= b && *it < e) it = set.erase(it);
-            else ++it;
-        }
-    };
-    evict(sUnhalfswappedVisited);
-    evict(sUnswappedHeads);
-    evict(sRejectedHeads);
+    auto in_range = [&](uintptr_t k) { return k >= b && k < e; };
+    sUnhalfswappedVisited.erase_if(in_range);
+    sUnswappedHeads.erase_if(in_range);
+    sRejectedHeads.erase_if(in_range);
     /* Heaps are bump-reset and reloaded at the same base across status
      * changes, so the same {b,e} arrives repeatedly — update in place
      * instead of letting the vector (linearly scanned on the per-joint
      * hot path) accumulate duplicates over a long session. */
     for (auto &range : sHalfswappedRanges) {
         if (range.base == b) {
+            if (journaled(b) && range.end != e) sJournal.push_back({ 3, J_RANGE_END, b, range.end });
             range.end = e;
             return;
         }
     }
+    if (journaled(b)) sJournal.push_back({ 3, J_RANGE_PUSH, b, 0 });
     sHalfswappedRanges.push_back({b, e});
 }
 
 extern "C" int port_aobj_unhalfswap_visit(const void *p) {
     if (p == nullptr) return 1;
     uintptr_t key = reinterpret_cast<uintptr_t>(p);
-    return sUnhalfswappedVisited.insert(key).second ? 0 : 1;
+    return sUnhalfswappedVisited.insert(key) ? 0 : 1;
 }
 
 extern "C" void port_aobj_event32_unhalfswap_reset(void) {
@@ -357,6 +425,37 @@ extern "C" void port_aobj_event32_unhalfswap_reset(void) {
     sRejectedHeads.clear();
     sHalfswappedRanges.clear();
     sUnhalfswappedVisited.clear();
+    /* Not a rollback point: a reset happens between scenes. */
+    sJournal.clear();
+    sJournalBase = 0;
+}
+
+extern "C" void port_aobj_journal_enable(int on, const void *rewind_base, size_t rewind_size) {
+    sJournal.clear();
+    sJournalBase = 0;
+    sJournalOn = (on != 0);
+    sJournalLo = reinterpret_cast<uintptr_t>(rewind_base);
+    sJournalHi = sJournalLo + rewind_size;
+}
+
+extern "C" uint64_t port_aobj_journal_mark(void) {
+    return sJournalBase + sJournal.size();
+}
+
+extern "C" int port_aobj_journal_rewind(uint64_t mark) {
+    if (mark < sJournalBase || mark > sJournalBase + sJournal.size()) return 0;
+    while (sJournalBase + sJournal.size() > mark) {
+        journal_undo(sJournal.back());
+        sJournal.pop_back();
+    }
+    return 1;
+}
+
+extern "C" void port_aobj_journal_trim(uint64_t oldest_mark) {
+    while (sJournalBase < oldest_mark && !sJournal.empty()) {
+        sJournal.pop_front();
+        sJournalBase++;
+    }
 }
 
 extern "C" int port_aobj_is_in_halfswapped_range(const void *p) {

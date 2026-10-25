@@ -13,6 +13,12 @@ extern "C" uint64_t portStructFixupsJournalMark(void);
 extern "C" int portStructFixupsJournalRewind(uint64_t mark);
 extern "C" void portStructFixupsJournalTrim(uint64_t oldest_mark);
 
+/* port_aobj_fixup.cpp */
+extern "C" void port_aobj_journal_enable(int on, const void *rewind_base, size_t rewind_size);
+extern "C" uint64_t port_aobj_journal_mark(void);
+extern "C" int port_aobj_journal_rewind(uint64_t mark);
+extern "C" void port_aobj_journal_trim(uint64_t oldest_mark);
+
 /* bridge/lbreloc_bridge.cpp */
 extern "C" void *portRelocBridgeSnapshot(void);
 extern "C" void portRelocBridgeRestore(const void *blob);
@@ -23,6 +29,7 @@ namespace {
 struct PortNetStateHostBlob
 {
 	uint64_t fixup_mark;
+	uint64_t aobj_mark;
 	void *bridge;
 };
 
@@ -31,17 +38,20 @@ struct PortNetStateHostBlob
 extern "C" void port_netstate_host_begin(const void *arena, size_t arena_size)
 {
 	portStructFixupsJournalEnable(1, arena, arena_size);
+	port_aobj_journal_enable(1, arena, arena_size);
 }
 
 extern "C" void port_netstate_host_end(void)
 {
 	portStructFixupsJournalEnable(0, nullptr, 0);
+	port_aobj_journal_enable(0, nullptr, 0);
 }
 
 extern "C" void *port_netstate_host_save(void)
 {
 	auto *blob = new PortNetStateHostBlob;
 	blob->fixup_mark = portStructFixupsJournalMark();
+	blob->aobj_mark = port_aobj_journal_mark();
 	blob->bridge = portRelocBridgeSnapshot();
 	return blob;
 }
@@ -53,6 +63,9 @@ extern "C" int port_netstate_host_restore(const void *blob_v)
 		return 0;
 	}
 	if (!portStructFixupsJournalRewind(blob->fixup_mark)) {
+		return 0;
+	}
+	if (!port_aobj_journal_rewind(blob->aobj_mark)) {
 		return 0;
 	}
 	portRelocBridgeRestore(blob->bridge);
@@ -76,4 +89,5 @@ extern "C" void port_netstate_host_trim(const void *blob_v)
 		return;
 	}
 	portStructFixupsJournalTrim(blob->fixup_mark);
+	port_aobj_journal_trim(blob->aobj_mark);
 }
