@@ -19,6 +19,20 @@
 #include <vector>
 
 extern "C" void port_log(const char *fmt, ...);
+
+namespace {
+/* What kind of path an address is, for the log (never the address itself:
+ * logs get shared). "home network" = a private range, so both machines sit
+ * behind the same router; "carrier NAT" = the ISP's shared range. */
+const char *route_kind(const PortNetAddr &a)
+{
+	uint32_t ip = a.ip;
+	if ((ip >> 24) == 127) return "loopback";
+	if ((ip >> 24) == 10 || (ip >> 20) == 0xAC1 || (ip >> 16) == 0xC0A8 || (ip >> 16) == 0xA9FE) return "home network";
+	if ((ip >> 22) == (0x64400000u >> 22)) return "carrier NAT";
+	return "internet";
+}
+} // namespace
 /* decomp/src/sys/netpeer.c (C) */
 extern "C" void syNetPeerLobbyConfigure(intptr_t sock, const PortNetAddr *peer, int is_host, uint32_t delay,
                                         uint32_t session_id, uint32_t seed, uint8_t host_fighter,
@@ -347,7 +361,7 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 			}
 			g.guests.push_back(Guest{ from, f[3], 0 });
 			guest = &g.guests.back();
-			port_log("SSB64 Lobby: %s joined (%d in)\n", f[3], (int)g.guests.size() + 1);
+			port_log("SSB64 Lobby: %s joined (%d in) over the %s\n", f[3], (int)g.guests.size() + 1, route_kind(from));
 			hosting_status();
 		}
 		guest->silent = 0;
@@ -370,6 +384,7 @@ void handle_datagram(char *text, int len, const PortNetAddr &from)
 		if (n >= 5) g.peer_fighter = std::atoi(f[4]);
 		if (n >= 6 && std::atoi(f[5]) != 0) g.peer_saw_us = true;
 		if (g.punch_replies++ == 0) {
+			port_log("SSB64 Lobby: reached the host over the %s\n", route_kind(g.peer));
 			set_state(PORT_LOBBY_PUNCHING, g.code_join ? "Reached " + g.friend_code + ", connecting..." : "Peer reached, connecting...");
 		}
 	} else if (std::strcmp(f[1], "RELAYED") == 0 && n >= 3) {
