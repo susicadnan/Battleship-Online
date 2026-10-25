@@ -1287,7 +1287,7 @@ void PortMenu::AddMenuSettings() {
         .RaceDisable(false)
         .Options(FloatSliderOptions()
         .Tooltip("Adjust the overall volume of the entire game.")
-        .DefaultValue(1.0f)
+        .DefaultValue(0.1f)
         .Min(0.0f)
         .Max(1.0f)
         .IsPercentage());
@@ -1341,7 +1341,8 @@ void PortMenu::AddMenuSettings() {
     AddWidget(path, "Master Unlocks", WIDGET_SEPARATOR_TEXT);
     AddWidget(path, "Unlock Everything", WIDGET_CVAR_CHECKBOX)
         .CVar("gCheats.UnlockAll")
-        .RaceDisable(false);
+        .RaceDisable(false)
+        .Options(CheckboxOptions().DefaultValue(true));
 
     AddWidget(path, "Individual Characters", WIDGET_SEPARATOR_TEXT);
     AddWidget(path, "Unlock Captain Falcon", WIDGET_CVAR_CHECKBOX).CVar("gCheats.UnlockCaptain").RaceDisable(false);

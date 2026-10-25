@@ -3,9 +3,9 @@
 // Wrap everything in extern "C" so the C-based engine can link to these functions
 extern "C" {
 
-    // Volume level getters pulled from the UI cvars
+    // Volume level getters pulled from the UI cvars. Master defaults to 10%.
     float port_get_master_volume() {
-        return CVarGetFloat("gSettings.Audio.MasterVolume", 1.0f);
+        return CVarGetFloat("gSettings.Audio.MasterVolume", 0.1f);
     }
 
     float port_get_music_volume() {

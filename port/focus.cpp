@@ -12,7 +12,7 @@ static void OnWindowFocus(IEvent* raw) {
 
     if (!ev->Focused) {
         if (sSavedMasterVolume < 0.0f && CVarGetInteger("gSettings.FocusControl.MuteOnFocusLoss", 0)) {
-            sSavedMasterVolume = CVarGetFloat("gSettings.Audio.MasterVolume", 1.0f);
+            sSavedMasterVolume = CVarGetFloat("gSettings.Audio.MasterVolume", 0.1f);
             CVarSetFloat("gSettings.Audio.MasterVolume", 0.0f);
         }
     } else {
