@@ -124,6 +124,13 @@ void PortNetplayDrawPanel()
 	ImGui::EndDisabled();
 	for (int i = 0; i < port_lobby_request_count(); i++) {
 		ImGui::PushID(i);
+		if (port_lobby_request_other_version(i)) {
+			ImGui::Text("%s wants to play, but has a different version of the game", port_lobby_request_code(i));
+			ImGui::SameLine();
+			if (ImGui::Button("OK")) port_lobby_request_answer(i, 0);
+			ImGui::PopID();
+			continue;
+		}
 		ImGui::Text("%s wants to play", port_lobby_request_code(i));
 		ImGui::SameLine();
 		if (ImGui::Button("Accept")) port_lobby_request_answer(i, 1);

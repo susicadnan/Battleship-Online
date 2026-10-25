@@ -5,6 +5,7 @@
 
 #include "netsock.h"
 #include "signal.h"
+#include "netplay_build_id.h"
 
 #include <libultraship/bridge/consolevariablebridge.h>
 
@@ -59,6 +60,10 @@ constexpr int kStunTries = 10;
 constexpr int kListenIdleFrames = 120;     /* the Online panel not drawn for this long: stop listening */
 constexpr int kBrokersMissingFrames = 600;
 constexpr const char *kSignalMagic = "BSS1";
+/* Sent with REQ, OK and VER: two games only play together when they are the
+ * same build (same commits), or they would drift apart in the menus. */
+const std::string kBuildField = std::string("b=") + PORT_NETPLAY_BUILD_ID;
+constexpr const char *kOtherVersion = " has a different version of the game. You both need the same download";
 
 struct Guest
 {
@@ -73,6 +78,7 @@ struct Request
 	std::string code;
 	std::vector<PortNetAddr> cands;
 	int age = 0;
+	bool other_version = false; /* their game is not this build: can't play */
 };
 
 /* A friend we accepted: we punch towards every endpoint they gave us until
@@ -545,7 +551,7 @@ void accept_friend(const std::string &code, const std::vector<PortNetAddr> &cand
 		}
 	}
 	if (!known) g.accepted.push_back(Accepted{ code, cands, 0 });
-	signal_send(code, "OK", my_endpoints());
+	signal_send(code, "OK", my_endpoints() + " " + kBuildField);
 	port_log("SSB64 Lobby: accepted %s\n", code.c_str());
 	if (g.state == PORT_LOBBY_HOSTING) hosting_status();
 }
@@ -562,8 +568,34 @@ void handle_signal(const std::string &msg)
 	std::string from;
 	if (!normalize_code(f[2], &from) || from == g.code) return;
 
+	/* Older builds send no build field at all: also a different version. */
+	bool same_build = n >= 5 && kBuildField == f[4];
+
 	if (std::strcmp(f[1], "REQ") == 0) {
 		std::vector<PortNetAddr> cands = parse_endpoints(n >= 4 ? f[3] : "");
+		if (!same_build) {
+			signal_send(from, "VER", kBuildField);
+			if (g.state == PORT_LOBBY_SEEKING && g.friend_code == from) {
+				close_socket();
+				set_state(PORT_LOBBY_FAILED, from + kOtherVersion);
+				g.friend_code.clear();
+				return;
+			}
+			for (auto &r : g.requests) {
+				if (r.code == from) {
+					r.age = 0;
+					return;
+				}
+			}
+			if ((int)g.requests.size() < kMaxRequests) {
+				Request r{ from, {}, 0 };
+				r.other_version = true;
+				g.requests.push_back(r);
+				port_log("SSB64 Lobby: %s wants to play but has a different build (%s, ours b=%s)\n", from.c_str(),
+				         n >= 5 ? f[4] : "none", PORT_NETPLAY_BUILD_ID);
+			}
+			return;
+		}
 		/* Both typed each other's code: that is both saying yes. The smaller
 		 * code hosts; the other keeps asking until the host's OK comes. */
 		if (g.state == PORT_LOBBY_SEEKING && g.friend_code == from) {
@@ -590,6 +622,14 @@ void handle_signal(const std::string &msg)
 		}
 	} else if (std::strcmp(f[1], "OK") == 0) {
 		if (g.state != PORT_LOBBY_SEEKING || g.friend_code != from) return;
+		if (!same_build) {
+			port_log("SSB64 Lobby: %s accepted but has a different build (%s, ours b=%s)\n", from.c_str(),
+			         n >= 5 ? f[4] : "none", PORT_NETPLAY_BUILD_ID);
+			close_socket();
+			set_state(PORT_LOBBY_FAILED, from + kOtherVersion);
+			g.friend_code.clear();
+			return;
+		}
 		g.cands = parse_endpoints(n >= 4 ? f[3] : "");
 		if (g.cands.empty()) return;
 		g.direct = true;
@@ -602,6 +642,13 @@ void handle_signal(const std::string &msg)
 		g.settle = 0;
 		g.peer_saw_us = false;
 		set_state(PORT_LOBBY_PUNCHING, from + " accepted, connecting...");
+	} else if (std::strcmp(f[1], "VER") == 0) {
+		if (g.state != PORT_LOBBY_SEEKING || g.friend_code != from) return;
+		port_log("SSB64 Lobby: %s has a different build (%s, ours b=%s)\n", from.c_str(), n >= 4 ? f[3] : "none",
+		         PORT_NETPLAY_BUILD_ID);
+		close_socket();
+		set_state(PORT_LOBBY_FAILED, from + kOtherVersion);
+		g.friend_code.clear();
 	} else if (std::strcmp(f[1], "NO") == 0 || std::strcmp(f[1], "FULL") == 0) {
 		if (g.state != PORT_LOBBY_SEEKING || g.friend_code != from) return;
 		bool full = std::strcmp(f[1], "FULL") == 0;
@@ -660,7 +707,7 @@ void service_codes()
 	if (g.state == PORT_LOBBY_SEEKING) {
 		/* STUN gets a second to answer before the first request, so the
 		 * public endpoint is usually in it; later copies carry it anyway. */
-		if (g.frames % kRequestInterval == 0 && (g.stun_done || g.frames >= 60)) signal_send(g.friend_code, "REQ", my_endpoints());
+		if (g.frames % kRequestInterval == 0 && (g.stun_done || g.frames >= 60)) signal_send(g.friend_code, "REQ", my_endpoints() + " " + kBuildField);
 		if (port_signal_brokers_up() == 0 && g.signal_frames > kBrokersMissingFrames)
 			g.status = "Can't reach the online service. Check your internet connection";
 		else if (port_signal_brokers_up() > 0)
@@ -734,7 +781,7 @@ extern "C" void port_lobby_tick(void)
 	lobby_autostart_from_env();
 	g.frames++;
 	if (sEnvListen) port_lobby_listen();
-	if (sEnvAutoAccept && !g.requests.empty()) port_lobby_request_answer(0, 1);
+	if (sEnvAutoAccept && !g.requests.empty()) port_lobby_request_answer(0, !port_lobby_request_other_version(0));
 	service_codes();
 	switch (g.state) {
 	case PORT_LOBBY_IDLE:
@@ -931,6 +978,10 @@ extern "C" void port_lobby_play_code(const char *friend_code)
 	/* They already asked us: entering their code is the same as Accept. */
 	for (auto &r : g.requests) {
 		if (r.code == code) {
+			if (r.other_version) {
+				set_state(PORT_LOBBY_FAILED, code + kOtherVersion);
+				return;
+			}
 			std::vector<PortNetAddr> cands = r.cands;
 			accept_friend(code, cands, true);
 			return;
@@ -956,6 +1007,7 @@ extern "C" void port_lobby_request_answer(int index, int accept)
 {
 	if (index < 0 || index >= (int)g.requests.size()) return;
 	Request r = g.requests[(size_t)index];
+	if (accept && r.other_version) return;
 	if (accept) {
 		/* From the menus a yes starts the match as soon as they are in;
 		 * a lobby that is already open keeps waiting for Start. */
@@ -965,6 +1017,14 @@ extern "C" void port_lobby_request_answer(int index, int accept)
 	signal_send(r.code, "NO");
 	g.requests.erase(g.requests.begin() + index);
 }
+
+extern "C" int port_lobby_request_other_version(int index)
+{
+	if (index < 0 || index >= (int)g.requests.size()) return 0;
+	return g.requests[(size_t)index].other_version ? 1 : 0;
+}
+
+extern "C" const char *port_lobby_build_id(void) { return PORT_NETPLAY_BUILD_ID; }
 
 extern "C" const char *port_lobby_friend_code(void) { return g.friend_code.c_str(); }
 

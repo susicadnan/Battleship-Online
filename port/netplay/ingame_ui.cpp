@@ -163,6 +163,15 @@ class NetplayIngamePanel : public Ship::GuiWindow {
 	void DrawRequests() {
 		for (int i = 0; i < port_lobby_request_count(); i++) {
 			ImGui::PushID(i);
+			if (port_lobby_request_other_version(i)) {
+				ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s wants to play, but has a different version of the game",
+				                   port_lobby_request_code(i));
+				ImGui::TextDisabled("You both need the same download.");
+				ImGui::SameLine();
+				if (ImGui::Button("OK")) port_lobby_request_answer(i, 0);
+				ImGui::PopID();
+				continue;
+			}
 			ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "%s wants to play", port_lobby_request_code(i));
 			ImGui::SameLine();
 			if (ImGui::Button("Accept")) port_lobby_request_answer(i, 1);

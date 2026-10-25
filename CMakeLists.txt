@@ -991,6 +991,18 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     )
 endif()
 
+# Netplay build id (the commits of this repo and decomp), regenerated every
+# build so two games can tell they are not the same version.
+set(SSB64_NETPLAY_GEN_DIR "${CMAKE_BINARY_DIR}/generated_netplay")
+add_custom_target(NetplayBuildId
+    COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DOUT_FILE=${SSB64_NETPLAY_GEN_DIR}/netplay_build_id.h
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NetplayBuildId.cmake
+    BYPRODUCTS ${SSB64_NETPLAY_GEN_DIR}/netplay_build_id.h
+    COMMENT "Netplay build id")
+add_dependencies(${PROJECT_NAME} NetplayBuildId)
+target_include_directories(${PROJECT_NAME} PRIVATE ${SSB64_NETPLAY_GEN_DIR})
+
 ################################################################################
 # Compile definitions
 ################################################################################
