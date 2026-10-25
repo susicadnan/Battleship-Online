@@ -61,6 +61,10 @@ void port_lobby_listen(void);
 void port_lobby_play_code(const char *friend_code);
 int port_lobby_request_count(void);              /* people asking to play with us */
 const char *port_lobby_request_code(int index);
+/* 1 when that request's game is a different build (it can't be accepted). */
+int port_lobby_request_other_version(int index);
+/* This build's id, as compared on connect (commits of the port and decomp). */
+const char *port_lobby_build_id(void);
 void port_lobby_request_answer(int index, int accept);
 const char *port_lobby_friend_code(void);        /* SEEKING/PUNCHING: who we asked */
 int port_lobby_online_service_up(void);
