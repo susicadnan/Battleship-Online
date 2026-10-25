@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stddef.h>
+#include <stdint.h>
+
 /**
  * port_aobj_fixup.h — per-stream un-halfswap for AObjEvent32 animation data.
  *
@@ -82,6 +85,14 @@ int port_aobj_is_in_halfswapped_range(const void *p);
  * and project_fixup_idempotency_heap_reuse for the failure mode.
  */
 int port_aobj_unhalfswap_visit(const void *p);
+
+/* Rollback (port/netstate_host.cpp): journal the "already fixed" sets so a
+ * restored arena gets the verdicts that match its bytes. mark/rewind/trim
+ * work like portStructFixupsJournal*. */
+void port_aobj_journal_enable(int on, const void *rewind_base, size_t rewind_size);
+uint64_t port_aobj_journal_mark(void);
+int port_aobj_journal_rewind(uint64_t mark);
+void port_aobj_journal_trim(uint64_t oldest_mark);
 
 #ifdef __cplusplus
 }

@@ -45,6 +45,14 @@ void port_netsock_sleep_us(uint32_t usecs);
 /* Monotonic milliseconds, for round-trip timing. */
 uint32_t port_netsock_now_ms(void);
 
+/* Bad-connection simulator for testing (Settings -> Netplay -> Advanced, or
+ * SSB64_NETSIM_DELAY / SSB64_NETSIM_JITTER / SSB64_NETSIM_LOSS). Applied to
+ * every UDP packet this machine receives: held for delay_ms plus a random
+ * 0..jitter_ms (so packets can arrive out of order), and loss_pct of them
+ * (0-100) are dropped. Set it on both machines to add it in both directions.
+ * All zero turns it off. */
+void port_netsock_set_sim(int delay_ms, int jitter_ms, int loss_pct);
+
 #ifdef __cplusplus
 }
 #endif

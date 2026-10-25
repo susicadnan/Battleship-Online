@@ -109,6 +109,7 @@ struct Lobby
 {
 	PortLobbyState state = PORT_LOBBY_IDLE;
 	std::string status = "Not connected";
+	std::string unreached;     /* accepted friend the host's punches never reached */
 	std::string code;          /* NAME#1234 */
 	std::string friend_code;
 	std::string public_addr;
@@ -258,7 +259,11 @@ Guest *find_guest(const PortNetAddr &addr)
 void hosting_status()
 {
 	std::string s = "Lobby open";
-	if (g.guests.empty()) s += g.accepted.empty() ? ". Friends join by entering your code" : ", connecting...";
+	if (!g.guests.empty() || !g.accepted.empty()) g.unreached.clear();
+	if (g.guests.empty() && !g.accepted.empty()) s += ", connecting to " + g.accepted.front().code + "...";
+	else if (g.guests.empty() && !g.unreached.empty())
+		s += ". Couldn't reach " + g.unreached + ": a router on one side blocks direct connections. Ask them to try again";
+	else if (g.guests.empty()) s += ". Friends join by entering your code";
 	else if (g.accept_autostart) s += ", starting";
 	else s += ": " + std::to_string(g.guests.size() + 1) + " people in. Press Start when everyone is here";
 	g.status = s;
@@ -289,6 +294,11 @@ void start_bootstrap()
 	 * run in lockstep. gNetplay.QuickMatch=1 is the old path (picks on the
 	 * Netplay page, straight into the battle). */
 	int menu_mode = CVarGetInteger("gNetplay.QuickMatch", 0) == 0 ? 1 : 0;
+	/* A host that guests join (direct Host/Join, friend codes) always runs
+	 * the group session through the game's menus (host_start), so a guest
+	 * that went for a quick match would wait for a MATCH_CONFIG that never
+	 * comes. Quick match is only for the relay-server pairing. */
+	if (g.direct || g.code_join) menu_mode = 1;
 	/* netpeer owns the socket from here on (it keeps it between games). */
 	syNetPeerLobbyConfigure(g.sock, &g.peer, g.is_host ? 1 : 0, delay, session_from_match(), seed, host_f, client_f, stage,
 	                        stocks, minutes, menu_mode);
@@ -736,6 +746,14 @@ void service_codes()
 		for (auto &guest : g.guests)
 			if (guest.code == a.code) in = true;
 		if (in || ++a.frames > kAcceptedPunchFrames || punch_sock < 0) {
+			if (!in && a.frames > kAcceptedPunchFrames) {
+				port_log("SSB64 Lobby: no direct path to %s\n", a.code.c_str());
+				std::string code = a.code;
+				g.accepted.erase(g.accepted.begin() + (long)i);
+				if (g.accepted.empty()) g.unreached = code;
+				if (g.state == PORT_LOBBY_HOSTING) hosting_status();
+				continue;
+			}
 			g.accepted.erase(g.accepted.begin() + (long)i);
 			continue;
 		}
@@ -845,9 +863,13 @@ extern "C" void port_lobby_tick(void)
 			start_bootstrap();
 		} else if (g.frames > kPunchTimeoutFrames) {
 			set_state(PORT_LOBBY_FAILED, g.code_join ? "Couldn't connect to " + g.friend_code +
-			                                               ". One of your routers blocks direct connections"
+			                                               ". A router on one side blocks direct connections. Try again;"
+			                                               " if it keeps failing, that network can't play online yet"
 			                                         : "Could not reach the other player (NAT?)");
 			close_socket();
+		} else if (g.code_join && g.punch_replies == 0 && g.frames == kPunchRelayFrames) {
+			g.status = "Still trying to reach " + g.friend_code + " (up to " +
+			           std::to_string(kPunchTimeoutFrames / 60) + " seconds)...";
 		}
 		return;
 

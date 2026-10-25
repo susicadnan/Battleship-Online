@@ -16,6 +16,11 @@ void port_log_init(const char *path)
 {
 	if (sLogFile != NULL) return;
 	sLogFile = fopen(path, "w");
+	/* SSB64_LOG_LINEBUF=1: flush every line, so a crash dump lands after the
+	 * last line really logged before it (slow; for debugging crashes). */
+	if ((sLogFile != NULL) && (getenv("SSB64_LOG_LINEBUF") != NULL)) {
+		setvbuf(sLogFile, NULL, _IOLBF, 0);
+	}
 }
 
 void port_log_close(void)
