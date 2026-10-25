@@ -9,4 +9,4 @@
 [submodule "decomp"]
 	path = decomp
 	url = https://github.com/susicadnan/ssb-decomp-re.git
-	branch = rollback-phase1
+	branch = main

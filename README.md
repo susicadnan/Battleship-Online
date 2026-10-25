@@ -2,53 +2,122 @@
   <img src="assets/BattleShip.svg" alt="BattleShip" width="640">
 </p>
 
-# BattleShip
+# BattleShip Online
 
-**BattleShip** is a PC port of **Super Smash Bros. (N64)** — both the **US** (NTSC-U v1.0) and **Japanese** (Nintendo All-Star! Dairantou Smash Brothers) releases — built on top of the [VetriTheRetri/ssb-decomp-re](https://github.com/vetritheretri/ssb-decomp-re) decompilation, using [libultraship](https://github.com/Kenix3/libultraship) for PC-native rendering / audio / input and [Torch](https://github.com/HarbourMasters/Torch) for extracting assets out of the ROM at build time.
+**Super Smash Bros. 64 on PC, online with your friends.** Type your friend's code (like `ADO#1148`), they press Accept, and you are on the character select screen together, with rollback netcode in the style of Slippi.
 
-Runs natively on macOS (Apple Silicon), Linux, Windows, and Android.
+BattleShip Online is built on top of [**BattleShip**](https://github.com/JRickey/BattleShip) by JRickey, the PC port of Super Smash Bros. (N64) made from the [ssb-decomp-re](https://github.com/VetriTheRetri/ssb-decomp-re) decompilation. Everything BattleShip does still works here; this fork adds online play.
 
-Download the high resolution texture pack from [GhostlyDark](https://github.com/GhostlyDark) [here!](https://evilgames.eu/texture-packs/ssb-reloaded.htm#pc)
+- **Connect by friend code.** Nobody sees or types an IP address, and there is no port forwarding and no server to host.
+- **Rollback netcode.** Your own fighter responds after the input delay only (2 frames by default); the network delay is hidden by rollback.
+- **Your name in the game.** The name part of your code is drawn over your fighter and on the results screen instead of P1 / P2.
+- **Lobbies of up to 4.** Two players fight 1v1 while the others spectate, and the winner stays on.
+- **The game's own menus.** Rules, character select, stage select, results and rematch all run in sync for everyone.
 
-## No copyrighted assets are included in this repository
+> **You need your own Super Smash Bros. (USA) v1.0 ROM.** No Nintendo data (ROM, game code, textures, audio) is in this repository or in the download. If you do not own the game, you cannot play this.
 
-**None of Nintendo's assets (code, textures, audio, models, text, ROM data) are checked into this repo or distributed with builds.** The port is a pure C/C++ source tree; every byte of Nintendo-owned data is extracted at build time from a ROM that *you* supply. If you do not own a legal copy of Super Smash Bros. for the Nintendo 64, you cannot build or run this project.
+## Quick start (Windows)
 
-You supply your own ROM. The decomp game code is region-compiled, so US
-and JP are separate builds — build the one matching your ROM
-(`-DSSB64_VERSION=us|jp`, see [BUILDING.md](BUILDING.md)). The canonical,
-supported dumps (internal name `SMASH BROTHERS`):
+1. Download **`BattleShip-Online-win64.zip`** from the [latest release](https://github.com/susicadnan/Battleship-Online/releases/latest).
+2. Extract the whole zip somewhere you can write to, such as your Desktop (not Program Files). Keep the files together.
+3. Double-click **`BattleShip.exe`**. On the first launch it asks for your ROM: browse to it (or drag it onto the window) and click **Extract**. This takes about a minute and only happens once. You can instead copy your ROM into the folder as `baserom.us.z64` before launching.
+4. When Windows Firewall asks, click **Allow** (tick Private and Public). If you clicked Cancel, online play cannot connect: allow `BattleShip.exe` under Windows Security > Firewall > "Allow an app through firewall".
 
-| Version | Game code | SHA‑1 | MD5 |
+Your ROM must be the USA v1.0 release (`.z64`, `.n64` or `.v64`):
+
+| Version | Game code | SHA-1 | MD5 |
 |---------|-----------|-------|-----|
-| **US** — NTSC-U v1.0 | `NALE` | `e2929e10fccc0aa84e5776227e798abc07cedabf` | `f7c52568a31aadf26e14dc2b6416b2ed` |
-| **JP** — Nintendo All-Star! Dairantou Smash Brothers v1.0 | `NALJ` | `4b71f0e01878696733eefa9c80d11c147ecb4984` | `66db457b130d31a286a23d6e4dd9726e` |
+| US (NTSC-U v1.0) | `NALE` | `e2929e10fccc0aa84e5776227e798abc07cedabf` | `f7c52568a31aadf26e14dc2b6416b2ed` |
 
-If your dump does not match the hashes for its version, it will not work.
+## Play with a friend
 
-## Project stats
+Both of you need **the same build** of the game, so both download the same release zip.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme-stats/star-growth-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/readme-stats/star-growth-light.svg">
-    <img src="assets/readme-stats/star-growth-light.svg" alt="GitHub star growth chart" width="840">
-  </picture>
-</p>
+1. Both players open **VS Mode**. The **Online** panel appears at the bottom of the screen.
+2. Set **Your name**. It is shown over your fighter. Your code, like `NAME#1234`, appears next to "your code"; the **Copy** button copies it. Send it to your friend (Discord, text, anything).
+3. One player types the other's code into **Friend's code** and presses **Play**.
+4. The other player sees "*code* wants to play" and presses **Accept**. If you both type each other's code and press Play, it connects without Accept.
+5. You land on character select together. Pick fighters and play. Rematch from the results screen.
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/readme-stats/release-downloads-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="assets/readme-stats/release-downloads-light.svg">
-    <img src="assets/readme-stats/release-downloads-light.svg" alt="Downloads by Platform chart" width="840">
-  </picture>
-</p>
+More friends can join the same lobby the same way (up to 4). Two players fight and the rest spectate; the winner stays on and the next player in line rotates in.
 
-<p align="center">
-  <sub>Charts are generated by GitHub Actions. Downloads are split by platform and ROM region; GitHub exposes current per-asset totals, not per-download timestamps.</sub>
-</p>
+Tips:
 
-## Features
+- Wired Ethernet beats Wi-Fi. The ping is shown in the match HUD.
+- Input delay 2 (the default) hides most of the network delay. Change it under Esc > Settings > Netplay.
+- If it says your router blocks direct connections, one of you is on a network that cannot accept direct connections (some mobile hotspots and ISPs). Try a different network.
+
+## Controls (gamepad)
+
+Plug controllers in before launching. Keyboard works too. Press **Esc** for the settings menu.
+
+| Button | Action | Button | Action |
+|--------|--------|--------|--------|
+| A | Attack | B | Special |
+| X / Y | Jump (or push the stick up) | Start | Pause |
+| LB | Taunt | LT | Shield |
+| RT | Grab | Left stick | Move |
+| Right stick | Smash attacks (aerials in the air) | D-pad | Same as the right stick in matches |
+
+Rebind under Esc > Settings > Input Mappings > Controller Configuration. Right-stick attacks and tap jump are per-player toggles under Settings > Control Enhancements. The download starts with everything unlocked and master volume at 10% (Settings > Audio).
+
+## Known limits
+
+- **Everyone needs the same build.** A different build is refused with "has a different version of the game". When a new release comes out, everyone updates.
+- **No relay server.** Connections are direct between players. If both players are behind strict NATs (some mobile hotspots, carrier-grade NAT), they may not be able to connect at all.
+- **Friend codes use free public services** (public STUN servers and public MQTT brokers, with messages encrypted per code). If all of those are down, codes cannot find each other.
+- **Windows download only.** Linux works when built from source (below); macOS and Android builds of the online version are untested.
+- **US ROM only** for online play.
+- **Ignore the "Updates" section in Settings.** It checks the upstream BattleShip project, and its download would replace this online build with one that has no online play.
+- The game log is `%APPDATA%\BattleShip\ssb64.log` and is overwritten on every launch, so copy it right after a session if you want to report a problem.
+
+## Building from source
+
+Clone with submodules (the `decomp` submodule comes from [susicadnan/ssb-decomp-re](https://github.com/susicadnan/ssb-decomp-re)):
+
+```bash
+git clone --recursive https://github.com/susicadnan/Battleship-Online.git
+cd Battleship-Online
+# To play online with people using the release zip, build the same commits:
+git checkout online-1.0 && git submodule update --init --recursive
+```
+
+Online play only connects games built from **exactly the same commits** (the build id is the port and decomp commit hashes). Building `main` or your own changes gives a different id, which is fine as long as everyone you play with runs the same build.
+
+Put your ROM at the repo root as `baserom.us.z64` (or pick it on first launch).
+
+### Windows (MSVC)
+
+Needs Visual Studio 2022 with the C++ workload, the Windows SDK, CMake and **Python 3.12 with Pillow** (`py -3.12 -m pip install pillow`). Newer Pythons may lack a Pillow build, so point CMake at 3.12 explicitly. From a Developer PowerShell:
+
+```powershell
+cmake -S . -B build\us -A x64 -DSSB64_VERSION=us -DPython3_EXECUTABLE="$(py -3.12 -c 'import sys; print(sys.executable)')"
+cmake --build build\us --config Release
+.\build\us\Release\BattleShip.exe
+```
+
+### Linux (clang)
+
+On Ubuntu/Debian:
+
+```bash
+sudo apt-get install -y cmake ninja-build zip clang libsdl2-dev libzip-dev libglew-dev \
+  nlohmann-json3-dev libtinyxml2-dev libspdlog-dev libgl1-mesa-dev libegl1-mesa-dev \
+  libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev python3 python3-pil
+# libzip-dev's CMake config expects these tools; stub them if your distro does not ship them
+for t in zipcmp zipmerge ziptool; do command -v $t >/dev/null || { sudo touch /usr/bin/$t; sudo chmod +x /usr/bin/$t; }; done
+
+CC=clang CXX=clang++ cmake -S . -B build-us -GNinja -DSSB64_VERSION=us \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-DFMT_CONSTEVAL=
+cmake --build build-us -j4
+cd build-us && ./BattleShip
+```
+
+`-DCMAKE_CXX_FLAGS=-DFMT_CONSTEVAL=` works around a `fmt` consteval error with newer clang. On clang++ 20 (Ubuntu 26.04) the system rapidjson `document.h` also needed a small local fix to compile.
+
+[BUILDING.md](BUILDING.md) has the upstream build notes (JP builds, macOS, GameCube adapter setup, packaging).
+
+## Everything else from BattleShip
 
 Everything below is toggleable in-game from the ESC menu.
 
@@ -97,37 +166,13 @@ Everything below is toggleable in-game from the ESC menu.
 ### Platform & quality-of-life
 
 - Runs natively on **macOS (Apple Silicon), Linux, Windows, and Android**
-- First-run ROM-extraction wizard, built-in update checker/downloader, and Discord Rich Presence
+- First-run ROM-extraction wizard and Discord Rich Presence
 
-### Rollback netcode & online play
+## Under the hood
 
-Work in progress.
+The sections below are from the upstream BattleShip README and still describe the port as a whole. The online layer adds `port/netplay/` (friend codes, lobby, transport) and rollback / net-input code in the decomp submodule; see [`docs/rollback_design.md`](docs/rollback_design.md), [`docs/netplay_connect_codes.md`](docs/netplay_connect_codes.md) and [`docs/netplay_groups.md`](docs/netplay_groups.md).
 
-## Author's notes
-
-### About the project
-
-This is a project that I started and developed alone with Claude until the v0.3-beta release. It took a little over a month of night and day work to get to the first beta release, and a massive 4 day long sprint working all day resolving bugs from v0.3-beta to v0.7-beta. As of now, this is no longer a pure AI project. Many people have offered their time playtesting, their knowledge of the game, or their experience with modding or competitive play; to bring improvements, bug fixes, new feature suggestions, and additions. Without them, the project would not be what it is today.
-
-If you find anything that you would like to see improved, create an issue on Github. I'll fix it.
-
-This port was started when the original decomp was 96% complete code only. The remaining 4% was the internal debug menu and Libultra functions that aren't necessary to port the game. The relocatable data was also not decompiled at the time. The port was designed with this in mind, and it is why certain design decisions had to have been made. I like to move fast, obviously.
-
-This project uses a heavily modified LibUltraShip and Torch, those two modules obviously don't work with every n64 game out of the box and a lot of game specific things needed to be implemented. The original game is quite unique and uses rendering techniques and n64 hardware tricks in ways other LUS projects did not need to account for.
-
-This is a passion project for me. Not out of nostalgia, but to actually make something. I don't have too much nostalgia for the original game, considering I didn't own a copy as a kid, but I remember playing it at a friend's house a handful of times. What motivates me to work on this is because I can. Because it's hard, because it hasn't been done before (at least not open source). It's required a ton of my personal time, even using AI. It's forced me to get creative, to design custom tools, to force the agents into certain boxes.
-
-People may not like it because I used AI, and that's okay. I'm not going to argue with your opinion or try to say that my way is the correct way of doing things. It works for me and that's what matters to me. My code is open source, it's free, it's MIT Licensed, and everyone can learn from it. That's what should matter to you.
-
-I hope you enjoy the project.
-
----
-
-## Building
-
-If you want to manually compile BattleShip, please consult the [building instructions](BUILDING.md).
-
-## Architecture
+### Architecture
 
 The port has three layers and they are kept deliberately separate:
 
@@ -312,9 +357,10 @@ PRs are welcome from anyone. If you're opening a bug report, the most useful thi
 - Menu fonts: [Montserrat](https://github.com/JulietaUla/Montserrat) and [Inconsolata](https://github.com/cyrealtype/Inconsolata), both bundled under the [SIL Open Font License 1.1](https://openfontlicense.org). License texts ship alongside the font files in [`assets/custom/fonts/`](assets/custom/fonts/).
 - Controller mappings: [`gamecontrollerdb.txt`](gamecontrollerdb.txt) from the [SDL_GameControllerDB](https://github.com/mdqinc/SDL_GameControllerDB) project — bundled with every build and loaded at startup so more controllers work out of the box. Distributed under the zlib license; full text in [`LICENSE`](LICENSE).
 - High-resolution texture pack: *SSB Reloaded* by [GhostlyDark](https://github.com/GhostlyDark), distributed separately at [evilgames.eu](https://evilgames.eu/texture-packs/ssb-reloaded.htm#pc). Not bundled with this repository or its builds — the port loads it only if you download it yourself.
-- Reference ports I learned from and adapted code from: [Starship](https://github.com/HarbourMasters/Starship) (SF64) and [Ship of Harkinian](https://github.com/HarbourMasters/Shipwright) (OoT) — both MIT-licensed by The Harbour Masters; see [`LICENSE`](LICENSE) for the per-file attribution.
-- Reference ports I learned from but did not borrow code from: [SM64 PC Port](https://github.com/sm64-port/sm64-port) (SM64), [SpaghettiKart](https://github.com/HarbourMasters/SpaghettiKart) (MK64).
-- Port work: me ([JRickey](https://github.com/JRickey)), with an enormous amount of help, debugging, and feature suggestions from contributors in our Discord server.
+- Reference ports the original port learned from and adapted code from: [Starship](https://github.com/HarbourMasters/Starship) (SF64) and [Ship of Harkinian](https://github.com/HarbourMasters/Shipwright) (OoT) — both MIT-licensed by The Harbour Masters; see [`LICENSE`](LICENSE) for the per-file attribution.
+- Reference ports the original port learned from but did not borrow code from: [SM64 PC Port](https://github.com/sm64-port/sm64-port) (SM64), [SpaghettiKart](https://github.com/HarbourMasters/SpaghettiKart) (MK64).
+- Original BattleShip PC port: [JRickey](https://github.com/JRickey) ([JRickey/BattleShip](https://github.com/JRickey/BattleShip)), with help, debugging, and feature suggestions from the contributors in its Discord server. Everything that is not online play in this repository is their work.
+- Online play (rollback netcode, friend codes, 4-player lobbies, in-game names): [ado](https://github.com/susicadnan), built on top of BattleShip. Please send online-play bugs here, not to the upstream BattleShip project.
 
 This project is **not affiliated with, endorsed by, or authorized by Nintendo.** It is a personal, non-commercial research and preservation effort. Do not upload ROMs, extracted `.o2r` archives, or any other Nintendo-owned data to issues or pull requests.
 
