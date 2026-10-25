@@ -1207,9 +1207,8 @@ void PortMenu::AddMenuSettings() {
             .CVar(enhancements::TapJumpCVarName(p))
             .RaceDisable(false)
             .Options(CheckboxOptions()
-                         .Tooltip("Disables jumping by pushing up on the analog stick. On by default; "
-                                  "in online matches each player's own setting applies to them.")
-                         .DefaultValue(true));
+                         .Tooltip("Disables jumping by pushing up on the analog stick. In online "
+                                  "matches each player's own setting applies to them."));
 
         AddWidget(path, fmt::format("Right Stick Attacks (P{})", p + 1), WIDGET_CVAR_CHECKBOX)
             .CVar(enhancements::DPadSmashCVarName(p))
